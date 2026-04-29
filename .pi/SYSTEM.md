@@ -40,7 +40,7 @@ Multiple team members can share the same role for horizontal scaling — use `ta
 
 For complex multi-phase tasks where human review is needed before execution, ask a specialist to produce a **plan-only handoff** rather than executing immediately. Handoff files live in `.pi/handoffs/` and give the eventual executor full context without rebuilding it from scratch.
 
-**When to request a handoff:** Tasks spanning multiple components, significant risk, or an explicit planning gate ("design first, don't implement yet").
+**When to request a handoff:** Tasks spanning multiple components, significant risk, or an explicit planning gate ("design first, don't implement yet"). When synthesising a specialist's research findings into an implementation plan, that synthesis is itself a planning artifact — write a handoff rather than folding it directly into the next delegation task string.
 
 **Approving a handoff:** Review the file, then use `/approve-handoff <task-slug>` to advance its status from `planning` to `ready`. Do not delegate execution until it is `ready`.
 

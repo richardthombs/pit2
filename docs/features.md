@@ -307,6 +307,34 @@ Design the public interface for the authentication module before implementation 
 
 ---
 
+## Token usage tracking
+
+**What it does:** The team widget displays accumulated token usage for each member once they have completed at least one delegation in the current session.
+
+**Display format:**
+
+```
+  ├─ Casey Kim            typescript-engineer    ✓ done: Implement…  ↑24.7k ↓5.1k $0.0134
+```
+
+**Fields:**
+
+| Symbol | Meaning |
+|---|---|
+| `↑` | Input tokens sent to the model |
+| `↓` | Output tokens returned by the model |
+| `$` | Estimated cost in USD (4 decimal places) |
+
+Token counts are formatted with `k`/`M` suffixes (e.g. `12.3k`, `1.2M`). Fields with a zero value are omitted entirely.
+
+**Accumulation:** Usage is summed across all delegations to that member within the session. Each time a member completes a task, their running totals are updated. The `contextTokens` value (context window size) reflects the most recent delegation rather than being summed.
+
+**Session scope:** Totals are per-session only. They reset when the manager session restarts or `/reload` is invoked. There is no persistent history of token usage across sessions.
+
+**When it appears:** The usage suffix is shown only after a member has completed at least one delegation. Members in `idle` state show no usage data.
+
+---
+
 ## Name pool
 
 The system maintains a fixed pool of 30 gender-neutral names used for automatic assignment when hiring. Key properties:
