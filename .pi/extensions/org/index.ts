@@ -409,7 +409,7 @@ export default function (pi: ExtensionAPI) {
 
 	function buildWidgetLines(cwd: string): string[] {
 		const roster = loadRoster(cwd);
-		const lines: string[] = ["  Engineering Manager", "  │"];
+		const lines: string[] = ["  Engineering Manager"];
 
 		if (roster.members.length === 0) {
 			lines.push("  └─ (no team members — use /hire <role>)");
@@ -418,7 +418,7 @@ export default function (pi: ExtensionAPI) {
 
 		const STATUS_SYMBOLS: Record<MemberStatus, string> = {
 			idle: "●",
-			working: "◎",
+			working: "🏃",
 			done: "✓",
 			error: "✗",
 		};
