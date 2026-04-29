@@ -207,6 +207,37 @@ By default `delegate` runs synchronously — it blocks until all work is complet
 
 ---
 
+## `/async` — Toggle async delegation mode
+
+**What it does:** Sets a session-level flag that controls whether `delegate` calls run synchronously (blocking until results are ready) or asynchronously (returning immediately, with results delivered as a follow-up message). This lets you fire off work and continue acting in the same turn while tasks run in the background.
+
+**Invocation:**
+
+| Form | Effect |
+|---|---|
+| `/async` | Toggles the current state (off → on, on → off) |
+| `/async on` | Explicitly enables async mode |
+| `/async off` | Explicitly disables async mode |
+
+**Current state display:** The Engineering Manager line in the team widget shows the current mode: `async: on` or `async: off` alongside other session indicators. The state reflects the flag immediately after any `/async` command.
+
+**Session scope:** The flag resets to **off** whenever the session starts or `/reload` is invoked. There is no persistence across sessions.
+
+**Interaction with the `async` parameter on `delegate`:** An explicit `async: true` or `async: false` argument passed directly to a `delegate` call always takes precedence over the session toggle. The session flag only applies when no explicit `async` parameter is given.
+
+**Example flow:**
+```
+/async on          # enable async for this session
+delegate { role: "qa-engineer", task: "..." }   # returns immediately
+# ... continue planning while QA runs ...
+# follow-up message arrives with QA results
+/async off         # back to synchronous delegation
+```
+
+**Out of scope:** The toggle does not affect tasks already in flight — changing the flag mid-turn only influences subsequent `delegate` calls.
+
+---
+
 ## Team widget
 
 **What it does:** Displays a live status panel showing the roster and each member's current state. Appears automatically below the editor when a session starts.
