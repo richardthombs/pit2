@@ -25,20 +25,9 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { parseFrontmatter, withFileMutationQueue } from "@mariozechner/pi-coding-agent";
 import { truncateToWidth } from "@mariozechner/pi-tui";
 import { Type } from "typebox";
+import { UsageStats, fmtTokens, formatUsage, serializeFrontmatter, extractSection } from "./utils.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
-
-interface TeamMember {
-	id: string;
-	name: string;
-	role: string;
-	hiredAt: string;
-}
-
-interface Roster {
-	members: TeamMember[];
-	usedNames: string[];
-}
 
 interface AgentConfig {
 	name: string;
@@ -48,14 +37,7 @@ interface AgentConfig {
 	systemPrompt: string;
 }
 
-interface UsageStats {
-	input: number;
-	output: number;
-	cacheRead: number;
-	cacheWrite: number;
-	cost: number;           // USD, summed across turns
-	contextTokens: number;  // from last turn — overwrite, not sum
-}
+export type { UsageStats };
 
 interface RunResult {
 	exitCode: number;
@@ -101,34 +83,50 @@ const NAME_POOL = [
 
 // ─── Roster helpers ───────────────────────────────────────────────────────────
 
+export interface TeamMember {
+	id: string;
+	name: string;
+	role: string;
+	hiredAt: string;
+}
+
+export interface Roster {
+	members: TeamMember[];
+	usedNames: string[];
+}
+
 function getRosterPath(cwd: string): string {
 	return path.join(cwd, ".pi", "roster.json");
 }
 
-function loadRoster(cwd: string): Roster {
+export function loadRoster(cwd: string): Roster {
 	const p = getRosterPath(cwd);
 	if (!fs.existsSync(p)) return { members: [], usedNames: [] };
 	try {
-		return JSON.parse(fs.readFileSync(p, "utf-8")) as Roster;
+		const parsed = JSON.parse(fs.readFileSync(p, "utf-8")) as Partial<Roster>;
+		return {
+			members: Array.isArray(parsed.members) ? parsed.members : [],
+			usedNames: Array.isArray(parsed.usedNames) ? parsed.usedNames : [],
+		};
 	} catch {
 		return { members: [], usedNames: [] };
 	}
 }
 
-async function saveRoster(cwd: string, roster: Roster): Promise<void> {
+export async function saveRoster(cwd: string, roster: Roster): Promise<void> {
 	const p = getRosterPath(cwd);
 	await withFileMutationQueue(p, () =>
 		fs.promises.writeFile(p, JSON.stringify(roster, null, 2), "utf-8"),
 	);
 }
 
-function pickUnusedName(usedNames: string[]): string | null {
+export function pickUnusedName(usedNames: string[]): string | null {
 	const available = NAME_POOL.filter((n) => !usedNames.includes(n));
 	if (available.length === 0) return null;
 	return available[Math.floor(Math.random() * available.length)];
 }
 
-function nameToId(name: string): string {
+export function nameToId(name: string): string {
 	return name.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
 }
 
@@ -142,7 +140,7 @@ function getHandoffsDir(cwd: string): string {
 	return path.join(cwd, ".pi", "handoffs");
 }
 
-function loadAgentConfig(cwd: string, roleName: string): AgentConfig | null {
+export function loadAgentConfig(cwd: string, roleName: string): AgentConfig | null {
 	const filePath = path.join(getAgentsDir(cwd), `${roleName}.md`);
 	if (!fs.existsSync(filePath)) return null;
 	try {
@@ -165,7 +163,7 @@ function loadAgentConfig(cwd: string, roleName: string): AgentConfig | null {
 	}
 }
 
-function listAvailableRoles(cwd: string): string[] {
+export function listAvailableRoles(cwd: string): string[] {
 	const dir = getAgentsDir(cwd);
 	if (!fs.existsSync(dir)) return [];
 	try {
@@ -176,37 +174,6 @@ function listAvailableRoles(cwd: string): string[] {
 	} catch {
 		return [];
 	}
-}
-
-// ─── Handoff helpers ─────────────────────────────────────────────────────────
-
-function serializeFrontmatter(fields: Record<string, unknown>, body: string): string {
-	const lines = ['---'];
-	for (const [key, value] of Object.entries(fields)) {
-		if (Array.isArray(value)) {
-			if (value.length === 0) {
-				lines.push(`${key}: []`);
-			} else {
-				lines.push(`${key}:`);
-				for (const item of value) lines.push(`  - ${JSON.stringify(item)}`);
-			}
-		} else if (value === null || value === undefined) {
-			lines.push(`${key}: null`);
-		} else if (typeof value === 'string') {
-			const needsQuoting = value.includes(':') || value.includes('#') || value.startsWith(' ');
-			lines.push(needsQuoting ? `${key}: ${JSON.stringify(value)}` : `${key}: ${value}`);
-		} else {
-			lines.push(`${key}: ${value}`);
-		}
-	}
-	lines.push('---');
-	return lines.join('\n') + '\n' + body;
-}
-
-function extractSection(body: string, heading: string): string {
-	const pattern = new RegExp(`## ${heading}\\n([\\s\\S]*?)(?=\\n## |$)`);
-	const match = body.match(pattern);
-	return match ? match[1].trim() : '';
 }
 
 // ─── Subagent spawning ────────────────────────────────────────────────────────
@@ -231,9 +198,9 @@ function getPiInvocation(args: string[]): { command: string; args: string[] } {
 	return { command: process.execPath, args };
 }
 
-type JsonMessage = { role: string; content: { type: string; text?: string }[] };
+export type JsonMessage = { role: string; content: { type: string; text?: string }[] };
 
-function getFinalOutput(messages: JsonMessage[]): string {
+export function getFinalOutput(messages: JsonMessage[]): string {
 	for (let i = messages.length - 1; i >= 0; i--) {
 		const msg = messages[i];
 		if (msg.role === "assistant") {
@@ -447,21 +414,6 @@ export default function (pi: ExtensionAPI) {
 			cost:          existing.cost         + delta.cost,
 			contextTokens: delta.contextTokens,  // take latest, not sum
 		});
-	}
-
-	function fmtTokens(n: number): string {
-		if (n < 1000)    return String(n);
-		if (n < 10000)   return `${(n / 1000).toFixed(1)}k`;
-		if (n < 1000000) return `${Math.round(n / 1000)}k`;
-		return `${(n / 1000000).toFixed(1)}M`;
-	}
-
-	function formatUsage(u: UsageStats): string {
-		const parts: string[] = [];
-		if (u.input)    parts.push(`↑${fmtTokens(u.input)}`);
-		if (u.output)   parts.push(`↓${fmtTokens(u.output)}`);
-		if (u.cost > 0) parts.push(`$${u.cost.toFixed(4)}`);
-		return parts.join(" ");
 	}
 
 	function buildWidgetLines(cwd: string, width: number = 120): string[] {
