@@ -175,6 +175,29 @@ Runs tasks sequentially. Each step can reference the previous step's output via 
 }
 ```
 
+### Async mode
+
+By default `delegate` runs synchronously — it blocks until all work is complete and then returns the results. Setting `async: true` changes this: the tool returns immediately and results are injected as a follow-up message into the Engineering Manager's conversation when the work finishes.
+
+**Parameter:**
+- `async` — `true` to return immediately; `false` (default) to block until complete.
+
+**When to use it:** Fire off a long-running task while continuing to do other things in the current turn — for example, kicking off a background research task while drafting a plan. Because results arrive as a follow-up message, the EM can respond to them naturally when they land.
+
+**Result delivery per mode:**
+
+| Mode | When the follow-up arrives |
+|---|---|
+| Single | One message when the task finishes |
+| Parallel | One message per task, delivered independently as each completes |
+| Chain | One combined message when all steps finish (or when the chain halts on failure) |
+
+**Sync behaviour is unchanged:** When `async: false` (the default), `delegate` behaves exactly as before — it blocks and returns results directly. No migration is needed for existing usage.
+
+**Widget updates:** The team widget reflects live status in real-time in both modes. Members transition through `working` → `done`/`error` as tasks progress, regardless of whether `async` is set.
+
+---
+
 ### Error cases (all modes)
 
 - Member name not found on roster → error with current roster listed.
