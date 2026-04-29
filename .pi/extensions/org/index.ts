@@ -47,10 +47,20 @@ interface AgentConfig {
 	systemPrompt: string;
 }
 
+interface UsageStats {
+	input: number;
+	output: number;
+	cacheRead: number;
+	cacheWrite: number;
+	cost: number;           // USD, summed across turns
+	contextTokens: number;  // from last turn — overwrite, not sum
+}
+
 interface RunResult {
 	exitCode: number;
 	output: string;
 	stderr: string;
+	usage: UsageStats;
 }
 
 // ─── Name Pool ────────────────────────────────────────────────────────────────
@@ -246,6 +256,10 @@ async function runTask(
 	if (config.model) args.push("--model", config.model);
 	if (config.tools?.length) args.push("--tools", config.tools.join(","));
 
+	const usage: UsageStats = {
+		input: 0, output: 0, cacheRead: 0, cacheWrite: 0,
+		cost: 0, contextTokens: 0
+	};
 	let tmpDir: string | null = null;
 	let tmpFile: string | null = null;
 	const messages: JsonMessage[] = [];
@@ -286,6 +300,15 @@ async function runTask(
 					if (ev.message.role === "assistant") {
 						const out = getFinalOutput(messages);
 						if (out) onProgress?.(out);
+						const u = (ev.message as any).usage;
+						if (u) {
+							usage.input      += u.input       ?? 0;
+							usage.output     += u.output      ?? 0;
+							usage.cacheRead  += u.cacheRead   ?? 0;
+							usage.cacheWrite += u.cacheWrite  ?? 0;
+							usage.cost       += u.cost?.total ?? 0;
+							usage.contextTokens = u.totalTokens ?? 0;
+						}
 					}
 				}
 				if (ev.type === "tool_result_end" && ev.message) {
@@ -325,7 +348,7 @@ async function runTask(
 		});
 
 		if (wasAborted) throw new Error("Task aborted");
-		return { exitCode, output: getFinalOutput(messages), stderr };
+		return { exitCode, output: getFinalOutput(messages), stderr, usage };
 	} finally {
 		if (tmpFile) {
 			try {
@@ -406,6 +429,37 @@ interface MemberState {
 
 export default function (pi: ExtensionAPI) {
 	const memberState = new Map<string, MemberState>();
+	const memberUsage = new Map<string, UsageStats>();
+
+	function accumulateUsage(memberName: string, delta: UsageStats): void {
+		const existing = memberUsage.get(memberName) ?? {
+			input: 0, output: 0, cacheRead: 0, cacheWrite: 0,
+			cost: 0, contextTokens: 0
+		};
+		memberUsage.set(memberName, {
+			input:         existing.input        + delta.input,
+			output:        existing.output       + delta.output,
+			cacheRead:     existing.cacheRead    + delta.cacheRead,
+			cacheWrite:    existing.cacheWrite   + delta.cacheWrite,
+			cost:          existing.cost         + delta.cost,
+			contextTokens: delta.contextTokens,  // take latest, not sum
+		});
+	}
+
+	function fmtTokens(n: number): string {
+		if (n < 1000)    return String(n);
+		if (n < 10000)   return `${(n / 1000).toFixed(1)}k`;
+		if (n < 1000000) return `${Math.round(n / 1000)}k`;
+		return `${(n / 1000000).toFixed(1)}M`;
+	}
+
+	function formatUsage(u: UsageStats): string {
+		const parts: string[] = [];
+		if (u.input)    parts.push(`↑${fmtTokens(u.input)}`);
+		if (u.output)   parts.push(`↓${fmtTokens(u.output)}`);
+		if (u.cost > 0) parts.push(`$${u.cost.toFixed(4)}`);
+		return parts.join(" ");
+	}
 
 	function buildWidgetLines(cwd: string): string[] {
 		const roster = loadRoster(cwd);
@@ -434,7 +488,11 @@ export default function (pi: ExtensionAPI) {
 					: "";
 			const namePart = m.name.padEnd(20);
 			const rolePart = m.role.padEnd(22);
-			lines.push(`${prefix}${namePart}${rolePart}${symbol} ${state.status}${taskNote}`);
+			const usage = memberUsage.get(m.name);
+			const usageNote = usage && (usage.input > 0 || usage.output > 0)
+				? `  ${formatUsage(usage)}`
+				: "";
+			lines.push(`${prefix}${namePart}${rolePart}${symbol} ${state.status}${taskNote}${usageNote}`);
 		});
 
 		return lines;
@@ -453,6 +511,7 @@ export default function (pi: ExtensionAPI) {
 		if (event.reason !== "startup" && event.reason !== "resume" && event.reason !== "reload") return;
 		// Reset all state to idle on (re)start
 		memberState.clear();
+		memberUsage.clear();
 		const roster = loadRoster(ctx.cwd);
 		if (roster.members.length > 0) {
 			const lines = roster.members.map((m) => `  • ${m.name} (${m.role})`).join("\n");
@@ -819,6 +878,7 @@ export default function (pi: ExtensionAPI) {
 					}
 
 					memberState.set(r.member.name, { status: "done", task });
+					accumulateUsage(r.member.name, result.usage);
 					updateWidget(ctx);
 					previous = result.output;
 					sections.push(
@@ -874,6 +934,7 @@ export default function (pi: ExtensionAPI) {
 							status: result.exitCode === 0 ? "done" : "error",
 							task: t.task,
 						});
+						accumulateUsage(r.member.name, result.usage);
 						updateWidget(ctx);
 						return { name: r.member.name, output: result.output, exitCode: result.exitCode };
 					}),
@@ -938,6 +999,7 @@ export default function (pi: ExtensionAPI) {
 				}
 
 				memberState.set(r.member.name, { status: "done", task: params.task });
+				accumulateUsage(r.member.name, result.usage);
 				updateWidget(ctx);
 				return {
 					content: [
