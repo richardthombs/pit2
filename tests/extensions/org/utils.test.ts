@@ -14,6 +14,7 @@ import * as path from "node:path";
 import {
   fmtTokens,
   formatUsage,
+  extractMemoryEntries,
   type UsageStats,
 } from "../../../.pi/extensions/org/utils.js";
 
@@ -403,5 +404,99 @@ describe("loadAgentConfig", () => {
       ["---", "name: Incomplete", "---", "", "Body."].join("\n"),
     );
     expect(loadAgentConfig(tmpDir, "incomplete")).toBeNull();
+  });
+});
+
+// ─── extractMemoryEntries ─────────────────────────────────────────────────────
+
+describe("extractMemoryEntries", () => {
+  it("extracts a valid single entry and strips the block from output", () => {
+    const input = "<!-- MEMORY\nsection: Conventions\nentry: Always use node: prefix for built-in imports\n-->";
+    const { entries, cleanOutput } = extractMemoryEntries(input);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toEqual({
+      section: "Conventions",
+      entry: "Always use node: prefix for built-in imports",
+    });
+    expect(cleanOutput).toBe("");
+    expect(cleanOutput).not.toContain("MEMORY");
+    expect(cleanOutput).not.toContain("Conventions");
+  });
+
+  it("parses a section name containing a space (EM Preferences)", () => {
+    const input = "<!-- MEMORY\nsection: EM Preferences\nentry: Prefer one clarifying question over wrong assumptions\n-->";
+    const { entries, cleanOutput } = extractMemoryEntries(input);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].section).toBe("EM Preferences");
+    expect(entries[0].entry).toBe("Prefer one clarifying question over wrong assumptions");
+    expect(cleanOutput).toBe("");
+  });
+
+  it("extracts multiple valid entries from a single output", () => {
+    const input = [
+      "<!-- MEMORY",
+      "section: Conventions",
+      "entry: First convention",
+      "-->",
+      "",
+      "<!-- MEMORY",
+      "section: Pitfalls",
+      "entry: Watch out for this pitfall",
+      "-->",
+    ].join("\n");
+    const { entries, cleanOutput } = extractMemoryEntries(input);
+    expect(entries).toHaveLength(2);
+    expect(entries[0]).toEqual({ section: "Conventions", entry: "First convention" });
+    expect(entries[1]).toEqual({ section: "Pitfalls", entry: "Watch out for this pitfall" });
+    expect(cleanOutput).toBe("");
+  });
+
+  it("does NOT strip a block with an unknown section name; entry not collected", () => {
+    const input = "<!-- MEMORY\nsection: InvalidSection\nentry: Should not be collected\n-->";
+    const { entries, cleanOutput } = extractMemoryEntries(input);
+    expect(entries).toHaveLength(0);
+    expect(cleanOutput).toContain("InvalidSection");
+    expect(cleanOutput).toContain("Should not be collected");
+  });
+
+  it("passes through unchanged a block missing the section: line", () => {
+    // Malformed: no section line — regex won’t match, block passes through
+    const input = "<!-- MEMORY\nentry: orphan entry\n-->";
+    const { entries, cleanOutput } = extractMemoryEntries(input);
+    expect(entries).toHaveLength(0);
+    expect(cleanOutput).toContain("orphan entry");
+  });
+
+  it("skips an entry that is whitespace-only", () => {
+    const input = "<!-- MEMORY\nsection: Conventions\nentry:   \n-->";
+    const { entries, cleanOutput } = extractMemoryEntries(input);
+    expect(entries).toHaveLength(0);
+    // Whitespace-only entry — block is NOT stripped (unknown/empty entry path leaves it in)
+    expect(cleanOutput).toContain("Conventions");
+  });
+
+  it("preserves surrounding text in cleanOutput", () => {
+    const input = [
+      "Here is some output.",
+      "",
+      "<!-- MEMORY",
+      "section: Decisions",
+      "entry: Use FIFO pruning at 10 items per section",
+      "-->",
+      "",
+      "And some more output.",
+    ].join("\n");
+    const { entries, cleanOutput } = extractMemoryEntries(input);
+    expect(entries).toHaveLength(1);
+    expect(cleanOutput).toContain("Here is some output.");
+    expect(cleanOutput).toContain("And some more output.");
+    expect(cleanOutput).not.toContain("MEMORY");
+  });
+
+  it("returns output unchanged and empty entries when no memory blocks are present", () => {
+    const input = "No memory blocks in this output.";
+    const { entries, cleanOutput } = extractMemoryEntries(input);
+    expect(entries).toHaveLength(0);
+    expect(cleanOutput).toBe("No memory blocks in this output.");
   });
 });
