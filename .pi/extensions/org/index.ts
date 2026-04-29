@@ -396,6 +396,7 @@ interface MemberState {
 // ─── Extension ────────────────────────────────────────────────────────────────
 
 export default function (pi: ExtensionAPI) {
+	let asyncMode = false;
 	const memberState = new Map<string, MemberState>();
 	const memberUsage = new Map<string, UsageStats>();
 	const memberTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -418,7 +419,7 @@ export default function (pi: ExtensionAPI) {
 
 	function buildWidgetLines(cwd: string, width: number = 120): string[] {
 		const roster = loadRoster(cwd);
-		const lines: string[] = ["  Engineering Manager"];
+		const lines: string[] = [`  Engineering Manager  (async: ${asyncMode ? "on" : "off"})`];
 
 		if (roster.members.length === 0) {
 			lines.push("  └─ (no team members — use /hire <role>)");
@@ -498,6 +499,7 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_start", async (event, ctx) => {
 		if (event.reason !== "startup" && event.reason !== "resume" && event.reason !== "reload") return;
 		// Reset all state to idle on (re)start
+		asyncMode = false;
 		memberState.clear();
 		memberUsage.clear();
 		memberTimers.clear();
@@ -619,6 +621,24 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
+	// ── /async ────────────────────────────────────────────────────────────────
+
+	pi.registerCommand("async", {
+		description: "Toggle async delegation on/off. When on, delegate returns immediately and delivers results as follow-up messages.",
+		handler: async (args, ctx) => {
+			const arg = args.trim().toLowerCase();
+			if (arg === "on") asyncMode = true;
+			else if (arg === "off") asyncMode = false;
+			else if (arg === "") asyncMode = !asyncMode;
+			else {
+				ctx.ui.notify("Usage: /async [on|off]", "info");
+				return;
+			}
+			updateWidget(ctx);
+			ctx.ui.notify(`Async delegation: ${asyncMode ? "on" : "off"}`, "info");
+		},
+	});
+
 	// ── /fire ──────────────────────────────────────────────────────────────────
 
 	pi.registerCommand("fire", {
@@ -714,7 +734,7 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			// ── Async: single mode ──────────────────────────────────────────
-			if (params.async && params.task) {
+			if ((params.async ?? asyncMode) && params.task) {
 				const r = resolve(params.member, params.role);
 				if ("error" in r) {
 					return { content: [{ type: "text", text: r.error }], details: {}, isError: true };
@@ -749,7 +769,7 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			// ── Async: parallel mode ──────────────────────────────────────────
-			if (params.async && params.tasks?.length) {
+			if ((params.async ?? asyncMode) && params.tasks?.length) {
 				if (params.tasks.length > 8) {
 					return { content: [{ type: "text", text: "Maximum 8 parallel tasks." }], details: {}, isError: true };
 				}
@@ -793,7 +813,7 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			// ── Async: chain mode ─────────────────────────────────────────────
-			if (params.async && params.chain?.length) {
+			if ((params.async ?? asyncMode) && params.chain?.length) {
 				const chainLength = params.chain.length;
 
 				(async () => {
