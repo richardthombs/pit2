@@ -127,6 +127,10 @@ function getAgentsDir(cwd: string): string {
 	return path.join(cwd, ".pi", "agents");
 }
 
+function getHandoffsDir(cwd: string): string {
+	return path.join(cwd, ".pi", "handoffs");
+}
+
 function loadAgentConfig(cwd: string, roleName: string): AgentConfig | null {
 	const filePath = path.join(getAgentsDir(cwd), `${roleName}.md`);
 	if (!fs.existsSync(filePath)) return null;
@@ -161,6 +165,37 @@ function listAvailableRoles(cwd: string): string[] {
 	} catch {
 		return [];
 	}
+}
+
+// ─── Handoff helpers ─────────────────────────────────────────────────────────
+
+function serializeFrontmatter(fields: Record<string, unknown>, body: string): string {
+	const lines = ['---'];
+	for (const [key, value] of Object.entries(fields)) {
+		if (Array.isArray(value)) {
+			if (value.length === 0) {
+				lines.push(`${key}: []`);
+			} else {
+				lines.push(`${key}:`);
+				for (const item of value) lines.push(`  - ${JSON.stringify(item)}`);
+			}
+		} else if (value === null || value === undefined) {
+			lines.push(`${key}: null`);
+		} else if (typeof value === 'string') {
+			const needsQuoting = value.includes(':') || value.includes('#') || value.startsWith(' ');
+			lines.push(needsQuoting ? `${key}: ${JSON.stringify(value)}` : `${key}: ${value}`);
+		} else {
+			lines.push(`${key}: ${value}`);
+		}
+	}
+	lines.push('---');
+	return lines.join('\n') + '\n' + body;
+}
+
+function extractSection(body: string, heading: string): string {
+	const pattern = new RegExp(`## ${heading}\\n([\\s\\S]*?)(?=\\n## |$)`);
+	const match = body.match(pattern);
+	return match ? match[1].trim() : '';
 }
 
 // ─── Subagent spawning ────────────────────────────────────────────────────────
@@ -571,6 +606,100 @@ export default function (pi: ExtensionAPI) {
 			memberState.delete(member.name);
 			ctx.ui.notify(`${member.name} has left the team.`, "info");
 			updateWidget(ctx);
+		},
+	});
+
+	// ── /approve-handoff ─────────────────────────────────────────────────────
+
+	pi.registerCommand("approve-handoff", {
+		description: "Approve a handoff file: /approve-handoff <task-slug>",
+		handler: async (args, ctx) => {
+			const slug = args.trim();
+			const dir = getHandoffsDir(ctx.cwd);
+			fs.mkdirSync(dir, { recursive: true });
+
+			const listFiles = (): string[] => {
+				try {
+					return fs
+						.readdirSync(dir)
+						.filter((f) => f.endsWith(".md"));
+				} catch {
+					return [];
+				}
+			};
+
+			const formatFileList = (files: string[]): string =>
+				files.length > 0
+					? files.map((f) => `  • ${f.slice(0, -3)}`).join("\n")
+					: "  (none)";
+
+			if (!slug) {
+				const files = listFiles();
+				ctx.ui.notify(
+					`Usage: /approve-handoff <task-slug>\n\nAvailable handoffs:\n${formatFileList(files)}`,
+					"info",
+				);
+				return;
+			}
+
+			const files = listFiles();
+			const matches = files.filter((f) => f === `${slug}.md` || f.endsWith(`-${slug}.md`));
+
+			if (matches.length === 0) {
+				ctx.ui.notify(
+					`No handoff file matching slug "${slug}".\n\nAvailable handoffs:\n${formatFileList(files)}`,
+					"error",
+				);
+				return;
+			}
+
+			if (matches.length > 1) {
+				ctx.ui.notify(
+					`Multiple handoff files match "${slug}". Please use the full filename stem:\n${matches.map((f) => `  • ${f.slice(0, -3)}`).join("\n")}`,
+					"error",
+				);
+				return;
+			}
+
+			const filename = matches[0];
+			const filePath = path.join(dir, filename);
+
+			let raw: string;
+			try {
+				raw = fs.readFileSync(filePath, "utf-8");
+			} catch (err) {
+				ctx.ui.notify(`Failed to read handoff file "${filename}": ${err}`, "error");
+				return;
+			}
+
+			const { frontmatter, body } = parseFrontmatter<Record<string, unknown>>(raw);
+
+			if (frontmatter.status === "ready") {
+				ctx.ui.notify(`Handoff "${filename.slice(0, -3)}" is already approved.`, "info");
+				return;
+			}
+
+			frontmatter.status = "ready";
+			const updated = serializeFrontmatter(frontmatter, body);
+
+			try {
+				await withFileMutationQueue(filePath, () =>
+					fs.promises.writeFile(filePath, updated, "utf-8"),
+				);
+			} catch (err) {
+				ctx.ui.notify(`Failed to write handoff file "${filename}": ${err}`, "error");
+				return;
+			}
+
+			const objective = extractSection(body, "Objective");
+			const objectivePart = objective
+				? `\n\n**Objective:**\n${objective}`
+				: "";
+
+			ctx.ui.notify(
+				`Approved handoff "${filename.slice(0, -3)}".${objectivePart}`,
+				"success",
+			);
 		},
 	});
 

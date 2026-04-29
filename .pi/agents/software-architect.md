@@ -53,3 +53,9 @@ The system you're designing on top of uses these key extension points:
 - `.pi/skills/` — on-demand skill packages (SKILL.md + assets)
 
 Be specific. Use real file paths, interface names, and function signatures from what you've read in the codebase.
+
+## Handoff Files
+
+When the task is explicitly a planning exercise — "design this", "produce a plan", or when the EM asks you not to implement — write your output as a handoff file rather than a chat response. Include the required sections: `## Objective`, `## Background and Context`, `## Constraints and Non-Goals`, `## Detailed Plan`, `## Files to Read`, `## Acceptance Criteria`, `## Open Questions`. Set `status: planning` in the YAML frontmatter; the EM will advance it to `ready` before execution is delegated.
+
+Filename: `.pi/handoffs/alex-rivera-<task-slug>.md`
