@@ -405,13 +405,15 @@ export default function (pi: ExtensionAPI) {
 		return lines;
 	}
 
+	let rosterWatcher: fs.FSWatcher | null = null;
+
 	function updateWidget(ctx: any): void {
 		if (!ctx?.hasUI) return;
 		const lines = buildWidgetLines(ctx.cwd);
 		ctx.ui.setWidget("org-team", lines, { placement: "belowEditor" });
 	}
 
-	// Show roster on startup
+	// Show roster on startup and watch roster.json for external changes
 	pi.on("session_start", async (event, ctx) => {
 		if (event.reason !== "startup" && event.reason !== "resume" && event.reason !== "reload") return;
 		// Reset all state to idle on (re)start
@@ -422,6 +424,22 @@ export default function (pi: ExtensionAPI) {
 			ctx.ui.notify(`Your team:\n${lines}`, "info");
 		}
 		updateWidget(ctx);
+
+		// Watch roster.json so external changes (direct edits, scripts) update the widget
+		rosterWatcher?.close();
+		const rosterPath = getRosterPath(ctx.cwd);
+		if (fs.existsSync(rosterPath)) {
+			try {
+				rosterWatcher = fs.watch(rosterPath, () => updateWidget(ctx));
+			} catch {
+				// Watcher unavailable in this environment — silently skip
+			}
+		}
+	});
+
+	pi.on("session_shutdown", async () => {
+		rosterWatcher?.close();
+		rosterWatcher = null;
 	});
 
 	// ── /team ──────────────────────────────────────────────────────────────────
