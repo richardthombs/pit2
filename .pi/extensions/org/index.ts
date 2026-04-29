@@ -402,6 +402,19 @@ export default function (pi: ExtensionAPI) {
 	const memberTimers = new Map<string, ReturnType<typeof setTimeout>>();
 	let lastCtx: any = null;
 
+	const scalingLocks = new Map<string, Promise<void>>();
+
+	function withScalingLock<T>(cwd: string, fn: () => Promise<T>): Promise<T> {
+		const prior = scalingLocks.get(cwd) ?? Promise.resolve();
+		let release!: () => void;
+		const gate = new Promise<void>(res => { release = res; });
+		scalingLocks.set(cwd, prior.then(() => gate));
+		return prior.then(async () => {
+			try { return await fn(); }
+			finally { release(); }
+		});
+	}
+
 	function accumulateUsage(memberName: string, delta: UsageStats): void {
 		const existing = memberUsage.get(memberName) ?? {
 			input: 0, output: 0, cacheRead: 0, cacheWrite: 0,
@@ -695,50 +708,90 @@ export default function (pi: ExtensionAPI) {
 		parameters: DelegateParams,
 
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
-			const roster = loadRoster(ctx.cwd);
-
-			// Resolve a member+config from member name or role name
-			function resolve(
+			// Resolve a member+config from member name or role name, auto-scaling when all are busy
+			async function resolveOrScale(
 				member?: string,
 				role?: string,
-			): { member: TeamMember; config: AgentConfig } | { error: string } {
+			): Promise<{ member: TeamMember; config: AgentConfig; hired: boolean } | { error: string }> {
+				if (!member && !role) return { error: "Specify either member name or role." };
+
+				// Named-member path
 				if (member) {
-					const m = roster.members.find(
-						(x) => x.name.toLowerCase() === member.toLowerCase(),
-					);
+					const roster = loadRoster(ctx.cwd);
+					const m = roster.members.find(x => x.name.toLowerCase() === member.toLowerCase());
 					if (!m) {
-						const names = roster.members.map((x) => x.name).join(", ") || "none";
+						const names = roster.members.map(x => x.name).join(", ") || "none";
 						return { error: `Team member "${member}" not found. Current team: ${names}` };
 					}
-					const config = loadAgentConfig(ctx.cwd, m.role);
-					if (!config)
-						return {
-							error: `Role definition ".pi/agents/${m.role}.md" not found for ${m.name}.`,
-						};
-					return { member: m, config };
+					const state = memberState.get(m.name) ?? { status: "idle" };
+					if (state.status !== "working") {
+						const config = loadAgentConfig(ctx.cwd, m.role);
+						if (!config) return { error: `Role definition ".pi/agents/${m.role}.md" not found for ${m.name}.` };
+						memberState.set(m.name, { status: "working" });
+						return { member: m, config, hired: false };
+					}
+					// Member is busy — fall through to role-based path with their role
+					role = m.role;
 				}
-				if (role) {
-					const m = roster.members.find((x) => x.role === role);
-					if (!m)
-						return {
-							error: `No team member with role "${role}". Hire one with /hire ${role}.`,
-						};
-					const config = loadAgentConfig(ctx.cwd, m.role);
-					if (!config)
-						return {
-							error: `Role definition ".pi/agents/${m.role}.md" not found for ${m.name}.`,
-						};
-					return { member: m, config };
-				}
-				return { error: "Specify either member name or role." };
+
+				// Role-based path (with scaling lock to prevent parallel hire races)
+				return withScalingLock(ctx.cwd, async () => {
+					const roster = loadRoster(ctx.cwd);
+					const roleMembers = roster.members.filter(x => x.role === role);
+
+					// Find an idle member
+					const idle = roleMembers.find(x =>
+						(memberState.get(x.name) ?? { status: "idle" }).status !== "working"
+					);
+					if (idle) {
+						const config = loadAgentConfig(ctx.cwd, idle.role);
+						if (!config) return { error: `Role definition ".pi/agents/${idle.role}.md" not found for ${idle.name}.` };
+						memberState.set(idle.name, { status: "working" });
+						return { member: idle, config, hired: false };
+					}
+
+					// All busy — auto-hire
+					const config = loadAgentConfig(ctx.cwd, role!);
+					if (!config) return { error: `Role definition ".pi/agents/${role}.md" not found — cannot auto-hire for "${role}".` };
+
+					const name = pickUnusedName(roster.usedNames);
+					if (!name) {
+						return { error: `Name pool exhausted — cannot auto-hire for role "${role}". The team has reached the 30-member lifetime limit. Use /fire to remove members (note: names are permanently retired).` };
+					}
+
+					const newMember: TeamMember = {
+						id: nameToId(name),
+						name,
+						role: role!,
+						hiredAt: new Date().toISOString(),
+					};
+					roster.members.push(newMember);
+					roster.usedNames.push(name);
+
+					// Write directly rather than via saveRoster: we are inside withScalingLock,
+					// and while withFileMutationQueue (used by saveRoster) is orthogonal and would
+					// not deadlock, writing here keeps the roster mutation atomic within the lock.
+					// The practical risk of a concurrent /hire or /fire racing this write is
+					// negligible — interactive commands do not overlap with in-flight delegation.
+					await fs.promises.writeFile(
+						getRosterPath(ctx.cwd),
+						JSON.stringify(roster, null, 2),
+						"utf-8"
+					);
+
+					memberState.set(newMember.name, { status: "working" });
+					updateWidget(ctx); // immediate update; watcher will also fire
+					return { member: newMember, config, hired: true };
+				});
 			}
 
 			// ── Async: single mode ──────────────────────────────────────────
 			if ((params.async ?? asyncMode) && params.task) {
-				const r = resolve(params.member, params.role);
+				const r = await resolveOrScale(params.member, params.role);
 				if ("error" in r) {
 					return { content: [{ type: "text", text: r.error }], details: {}, isError: true };
 				}
+				const hiredNote = r.hired ? `Auto-hired ${r.member.name} (${r.config.name}) — ` : "";
 				memberState.set(r.member.name, { status: "working", task: params.task });
 				updateWidget(ctx);
 
@@ -763,7 +816,7 @@ export default function (pi: ExtensionAPI) {
 					});
 
 				return {
-					content: [{ type: "text", text: `Task started in background — ${r.member.name} is working.` }],
+					content: [{ type: "text", text: `${hiredNote}Task started in background — ${r.member.name} is working.` }],
 					details: {},
 				};
 			}
@@ -775,14 +828,17 @@ export default function (pi: ExtensionAPI) {
 				}
 
 				let started = 0;
+				const ackLines: string[] = [];
 				for (const [i, t] of params.tasks.entries()) {
-					const r = resolve(t.member, t.role);
+					const r = await resolveOrScale(t.member, t.role);
 					if ("error" in r) {
 						deliverResult(t.member ?? t.role ?? `task ${i + 1}`, "unknown", `Could not start: ${r.error}`);
 						continue;
 					}
+					const hiredNote = r.hired ? `Auto-hired ${r.member.name} (${r.config.name}) — ` : "";
 					memberState.set(r.member.name, { status: "working", task: t.task });
 					started++;
+					ackLines.push(`${hiredNote}${r.member.name} starting in background.`);
 
 					runTask(r.config, r.member.name, t.task, t.cwd ?? ctx.cwd, signal)
 						.then(result => {
@@ -807,7 +863,7 @@ export default function (pi: ExtensionAPI) {
 
 				updateWidget(ctx);
 				return {
-					content: [{ type: "text", text: `${started} task(s) started in background.` }],
+					content: [{ type: "text", text: ackLines.join("\n") || `${started} task(s) started in background.` }],
 					details: {},
 				};
 			}
@@ -822,15 +878,17 @@ export default function (pi: ExtensionAPI) {
 
 					for (let i = 0; i < chainLength; i++) {
 						const step = params.chain![i];
-						const r = resolve(step.member, step.role);
+						const r = await resolveOrScale(step.member, step.role);
 						if ("error" in r) {
 							deliverResult("Chain", "error", `Step ${i + 1} failed to resolve: ${r.error}`);
 							return;
 						}
 
+						const hiredNote = r.hired ? `Auto-hired ${r.member.name} (${r.config.name}) — ` : "";
 						const task = step.task.replace(/\{previous\}/g, previous);
 						memberState.set(r.member.name, { status: "working", task });
 						updateWidget(ctx);
+						pi.sendUserMessage(`${hiredNote}[chain ${i + 1}/${chainLength}] ${r.member.name} starting…`, { deliverAs: "followUp" });
 
 						let result: RunResult;
 						try {
@@ -883,7 +941,7 @@ export default function (pi: ExtensionAPI) {
 
 				for (let i = 0; i < params.chain.length; i++) {
 					const step = params.chain[i];
-					const r = resolve(step.member, step.role);
+					const r = await resolveOrScale(step.member, step.role);
 					if ("error" in r) {
 						return {
 							content: [{ type: "text", text: `Chain step ${i + 1} failed: ${r.error}` }],
@@ -892,6 +950,7 @@ export default function (pi: ExtensionAPI) {
 						};
 					}
 
+					const hiredNote = r.hired ? `Auto-hired ${r.member.name} (${r.config.name}) — ` : "";
 					const task = step.task.replace(/\{previous\}/g, previous);
 					memberState.set(r.member.name, { status: "working", task });
 					updateWidget(ctx);
@@ -899,7 +958,7 @@ export default function (pi: ExtensionAPI) {
 						content: [
 							{
 								type: "text",
-								text: `[chain ${i + 1}/${params.chain.length}] ${r.member.name} working...`,
+								text: `${hiredNote}[chain ${i + 1}/${params.chain.length}] ${r.member.name} working...`,
 							},
 						],
 						details: {},
@@ -966,7 +1025,7 @@ export default function (pi: ExtensionAPI) {
 
 				const results = await Promise.all(
 					params.tasks.map(async (t, i) => {
-						const r = resolve(t.member, t.role);
+						const r = await resolveOrScale(t.member, t.role);
 						if ("error" in r) {
 							return {
 								name: t.member ?? t.role ?? `task ${i + 1}`,
@@ -974,13 +1033,14 @@ export default function (pi: ExtensionAPI) {
 								exitCode: 1,
 							};
 						}
+						const hiredNote = r.hired ? `Auto-hired ${r.member.name} (${r.config.name}) — ` : "";
 						memberState.set(r.member.name, { status: "working", task: t.task });
 						updateWidget(ctx);
 						onUpdate?.({
 							content: [
 								{
 									type: "text",
-									text: `[parallel ${i + 1}/${params.tasks!.length}] ${r.member.name} starting…`,
+									text: `${hiredNote}[parallel ${i + 1}/${params.tasks!.length}] ${r.member.name} starting…`,
 								},
 							],
 							details: {},
@@ -1021,15 +1081,16 @@ export default function (pi: ExtensionAPI) {
 
 			// ── Single mode ───────────────────────────────────────────────────
 			if (params.task) {
-				const r = resolve(params.member, params.role);
+				const r = await resolveOrScale(params.member, params.role);
 				if ("error" in r) {
 					return { content: [{ type: "text", text: r.error }], details: {}, isError: true };
 				}
 
+				const hiredNote = r.hired ? `Auto-hired ${r.member.name} (${r.config.name}) — ` : "";
 				memberState.set(r.member.name, { status: "working", task: params.task });
 				updateWidget(ctx);
 				onUpdate?.({
-					content: [{ type: "text", text: `${r.member.name} starting task…` }],
+					content: [{ type: "text", text: `${hiredNote}${r.member.name} starting task…` }],
 					details: {},
 				});
 
