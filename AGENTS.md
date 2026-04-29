@@ -1,64 +1,35 @@
 # pit2 — Engineering Organisation on pi
 
-This project implements an AI-powered software engineering organisation using the **pi coding agent** framework.
+An AI-powered software engineering team. The top-level pi session is the **Engineering Manager**; specialised team members are pi subagents spawned on demand via the `delegate` tool.
 
-## What this is
-
-A hierarchical multi-agent system where:
-- The top-level pi session acts as the **Engineering Manager**
-- Specialised **team members** are pi subagents spawned on demand
-- Each team member maps to a **role definition** in `.pi/agents/<role>.md`
-- A **roster** (`.pi/roster.json`) tracks which humans are hired to which roles
-- The **org extension** (`.pi/extensions/org/index.ts`) wires it all together
-
-## Key files
-
-| Path | Purpose |
-|---|---|
-| `.pi/SYSTEM.md` | Manager system prompt (replaces pi default) |
-| `.pi/roster.json` | Team roster — members, roles, hire dates |
-| `.pi/agents/*.md` | Role definitions — frontmatter + agent system prompt |
-| `.pi/extensions/org/index.ts` | Core extension: delegate tool + hire/fire/team commands |
+> For technical details on how it's built, see `README.md`.
 
 ## Commands
 
 | Command | What it does |
 |---|---|
 | `/team` | Show current roster |
-| `/roles` | List role definitions with staffing status |
-| `/hire <role>` | Add a team member to a role |
-| `/fire <name>` | Remove a team member |
+| `/roles` | List available roles with staffing status |
+| `/hire <role>` | Add a team member (name assigned automatically; max 30 members) |
+| `/fire <name>` | Remove a team member (prompts for confirmation) |
 
-## delegate tool modes
+## Delegating work
 
 ```
-# Single
+# Single task — by name or role
 delegate { member: "Casey Kim", task: "..." }
 delegate { role: "typescript-engineer", task: "..." }
 
-# Parallel
+# Parallel — up to 8 concurrent tasks
 delegate { tasks: [{ member: "...", task: "..." }, ...] }
 
-# Chain (sequential, {previous} placeholder)
+# Chain — sequential; use {previous} to pass prior output forward
 delegate { chain: [{ role: "software-architect", task: "design X" },
                    { role: "typescript-engineer", task: "implement {previous}" }] }
 ```
 
-## Role definitions format
+Tasks must be self-contained: include all context the team member needs (file paths, specs, constraints). Team members have no memory of previous sessions.
 
-```yaml
----
-name: role-name          # lowercase-hyphenated, matches filename
-description: ...         # shown in /roles and used in team roster
-tools: read, bash, ...   # comma-separated
-model: claude-...        # optional
----
-Body becomes --append-system-prompt content for the subagent.
-```
+## Team widget
 
-## Pi framework location
-
-`/Users/richardthombs/.nvm/versions/node/v24.13.1/lib/node_modules/@mariozechner/pi-coding-agent/`
-- `docs/` — reference documentation
-- `examples/extensions/` — working extension examples
-- `examples/extensions/subagent/` — the subagent pattern this project builds on
+A live status panel shows the roster and each member's current state (`idle`, `working`, `done`, `error`) below the editor. It updates automatically as tasks run.
