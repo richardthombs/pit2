@@ -307,6 +307,9 @@ async function runTask(
 					// Memory read failure is non-fatal — proceed without it
 				}
 			}
+
+			// Always append write instructions for memory-enabled roles
+			promptContent += `\n\n---\n## Recording New Memories\n\nAt the end of your response, if you encountered something genuinely worth remembering for future tasks — a convention, a pitfall, a decision, an EM preference — emit one or more memory entries in this exact format:\n\n<!-- MEMORY\nsection: Conventions\nentry: One concise sentence describing what to remember\n-->\n\nValid sections: Conventions, Decisions, Pitfalls, EM Preferences, Codebase Landmarks, Miscellaneous\n\nOnly emit entries for novel, reusable insights. Do not repeat what is already in memory above. Do not emit entries for task-specific details that will not generalise.`;
 		}
 
 		if (promptContent.trim()) {

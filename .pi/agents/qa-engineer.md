@@ -66,15 +66,3 @@ Conclusion: <approved | approved with notes | blocked — one line>
 
 If your conclusion is "no action needed", say so explicitly and give a one-line reason. Do not go silent.
 
-## Role Memory
-
-At the end of your response, if you encountered something genuinely worth remembering for future tasks — a convention, a pitfall, a decision, an EM preference — emit one or more memory entries in this exact format:
-
-<!-- MEMORY
-section: Conventions
-entry: One concise sentence describing what to remember
--->
-
-Valid sections: Conventions, Decisions, Pitfalls, EM Preferences, Codebase Landmarks, Miscellaneous
-
-Only emit entries for novel, reusable insights not already present in your role memory above. Do not repeat what is already there. Do not emit entries for task-specific details that won't generalise.
