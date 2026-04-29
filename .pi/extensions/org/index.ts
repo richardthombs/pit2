@@ -25,7 +25,7 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { parseFrontmatter, withFileMutationQueue } from "@mariozechner/pi-coding-agent";
 import { truncateToWidth } from "@mariozechner/pi-tui";
 import { Type } from "typebox";
-import { UsageStats, fmtTokens, formatUsage, serializeFrontmatter, extractSection } from "./utils.js";
+import { UsageStats, fmtTokens, formatUsage } from "./utils.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -134,10 +134,6 @@ export function nameToId(name: string): string {
 
 function getAgentsDir(cwd: string): string {
 	return path.join(cwd, ".pi", "agents");
-}
-
-function getHandoffsDir(cwd: string): string {
-	return path.join(cwd, ".pi", "handoffs");
 }
 
 export function loadAgentConfig(cwd: string, roleName: string): AgentConfig | null {
@@ -651,100 +647,6 @@ export default function (pi: ExtensionAPI) {
 			memberState.delete(member.name);
 			ctx.ui.notify(`${member.name} has left the team.`, "info");
 			updateWidget(ctx);
-		},
-	});
-
-	// ── /approve-handoff ─────────────────────────────────────────────────────
-
-	pi.registerCommand("approve-handoff", {
-		description: "Approve a handoff file: /approve-handoff <task-slug>",
-		handler: async (args, ctx) => {
-			const slug = args.trim();
-			const dir = getHandoffsDir(ctx.cwd);
-			fs.mkdirSync(dir, { recursive: true });
-
-			const listFiles = (): string[] => {
-				try {
-					return fs
-						.readdirSync(dir)
-						.filter((f) => f.endsWith(".md"));
-				} catch {
-					return [];
-				}
-			};
-
-			const formatFileList = (files: string[]): string =>
-				files.length > 0
-					? files.map((f) => `  • ${f.slice(0, -3)}`).join("\n")
-					: "  (none)";
-
-			if (!slug) {
-				const files = listFiles();
-				ctx.ui.notify(
-					`Usage: /approve-handoff <task-slug>\n\nAvailable handoffs:\n${formatFileList(files)}`,
-					"info",
-				);
-				return;
-			}
-
-			const files = listFiles();
-			const matches = files.filter((f) => f === `${slug}.md` || f.endsWith(`-${slug}.md`));
-
-			if (matches.length === 0) {
-				ctx.ui.notify(
-					`No handoff file matching slug "${slug}".\n\nAvailable handoffs:\n${formatFileList(files)}`,
-					"error",
-				);
-				return;
-			}
-
-			if (matches.length > 1) {
-				ctx.ui.notify(
-					`Multiple handoff files match "${slug}". Please use the full filename stem:\n${matches.map((f) => `  • ${f.slice(0, -3)}`).join("\n")}`,
-					"error",
-				);
-				return;
-			}
-
-			const filename = matches[0];
-			const filePath = path.join(dir, filename);
-
-			let raw: string;
-			try {
-				raw = fs.readFileSync(filePath, "utf-8");
-			} catch (err) {
-				ctx.ui.notify(`Failed to read handoff file "${filename}": ${err}`, "error");
-				return;
-			}
-
-			const { frontmatter, body } = parseFrontmatter<Record<string, unknown>>(raw);
-
-			if (frontmatter.status === "ready") {
-				ctx.ui.notify(`Handoff "${filename.slice(0, -3)}" is already approved.`, "info");
-				return;
-			}
-
-			frontmatter.status = "ready";
-			const updated = serializeFrontmatter(frontmatter, body);
-
-			try {
-				await withFileMutationQueue(filePath, () =>
-					fs.promises.writeFile(filePath, updated, "utf-8"),
-				);
-			} catch (err) {
-				ctx.ui.notify(`Failed to write handoff file "${filename}": ${err}`, "error");
-				return;
-			}
-
-			const objective = extractSection(body, "Objective");
-			const objectivePart = objective
-				? `\n\n**Objective:**\n${objective}`
-				: "";
-
-			ctx.ui.notify(
-				`Approved handoff "${filename.slice(0, -3)}".${objectivePart}`,
-				"success",
-			);
 		},
 	});
 

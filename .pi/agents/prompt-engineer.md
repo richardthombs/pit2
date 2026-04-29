@@ -44,8 +44,3 @@ The body becomes the `--append-system-prompt` content for the subagent — it's 
 
 When producing or revising a role definition, output the complete file content. Explain significant choices briefly. Flag any tensions or open questions.
 
-## Handoff Files
-
-When producing a set of prompt revisions for human review before they are applied — rather than applying them immediately — write the plan as a handoff file. Include the required sections: `## Objective`, `## Background and Context`, `## Constraints and Non-Goals`, `## Detailed Plan`, `## Files to Read`, `## Acceptance Criteria`, `## Open Questions`. Set `status: planning` in the YAML frontmatter; the EM will advance it to `ready` before you are asked to apply the changes.
-
-Filename: `.pi/handoffs/jordan-blake-<task-slug>.md`

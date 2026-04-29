@@ -14,8 +14,6 @@ import * as path from "node:path";
 import {
   fmtTokens,
   formatUsage,
-  serializeFrontmatter,
-  extractSection,
   type UsageStats,
 } from "../../../.pi/extensions/org/utils.js";
 
@@ -31,9 +29,6 @@ import {
   type JsonMessage,
   type Roster,
 } from "../../../.pi/extensions/org/index.js";
-
-// Real parseFrontmatter from the mock (yaml-backed)
-import { parseFrontmatter } from "@mariozechner/pi-coding-agent";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -152,125 +147,6 @@ describe("formatUsage", () => {
   it("shows cost with exactly 4 decimal places", () => {
     const result = formatUsage(makeUsage({ cost: 1.5 }));
     expect(result).toBe("$1.5000");
-  });
-});
-
-// ─── serializeFrontmatter ─────────────────────────────────────────────────────
-
-describe("serializeFrontmatter", () => {
-  it("serializes simple string values without quotes", () => {
-    const out = serializeFrontmatter({ name: "Casey Kim", status: "planning" }, "");
-    expect(out).toContain("name: Casey Kim");
-    expect(out).toContain("status: planning");
-  });
-
-  it("quotes strings containing a colon", () => {
-    const out = serializeFrontmatter({ title: "Foo: Bar" }, "");
-    expect(out).toContain(`title: "Foo: Bar"`);
-  });
-
-  it("quotes strings containing a hash", () => {
-    const out = serializeFrontmatter({ label: "feature #1" }, "");
-    expect(out).toContain(`label: "feature #1"`);
-  });
-
-  it("quotes strings that start with a space", () => {
-    const out = serializeFrontmatter({ note: " leading space" }, "");
-    expect(out).toContain(`note: " leading space"`);
-  });
-
-  it("serializes null as 'null'", () => {
-    const out = serializeFrontmatter({ owner: null }, "");
-    expect(out).toContain("owner: null");
-  });
-
-  it("serializes undefined as 'null'", () => {
-    const out = serializeFrontmatter({ owner: undefined }, "");
-    expect(out).toContain("owner: null");
-  });
-
-  it("serializes number and boolean values without quotes", () => {
-    const out = serializeFrontmatter({ count: 42, active: true, ratio: 0.5 }, "");
-    expect(out).toContain("count: 42");
-    expect(out).toContain("active: true");
-    expect(out).toContain("ratio: 0.5");
-  });
-
-  it("serializes an empty array as '[]'", () => {
-    const out = serializeFrontmatter({ tags: [] }, "");
-    expect(out).toContain("tags: []");
-  });
-
-  it("serializes a non-empty array as multi-line with '  - ' prefix", () => {
-    const out = serializeFrontmatter({ tags: ["a", "b"] }, "");
-    expect(out).toContain("tags:");
-    expect(out).toContain('  - "a"');
-    expect(out).toContain('  - "b"');
-  });
-
-  it("wraps output with --- delimiters", () => {
-    const out = serializeFrontmatter({ x: "y" }, "");
-    expect(out.startsWith("---\n")).toBe(true);
-    expect(out).toContain("\n---\n");
-  });
-
-  it("preserves body content unchanged after the closing ---", () => {
-    const body = "## Objective\n\nDo the thing.\n\n## Details\n\nMore here.";
-    const out = serializeFrontmatter({ status: "ready" }, body);
-    expect(out.endsWith(body)).toBe(true);
-  });
-
-  it("round-trip: parse then serialize is stable", () => {
-    // Build a doc, parse it, re-serialize, parse again — second parse should match first.
-    const original = serializeFrontmatter(
-      { status: "planning", assignee: "Casey Kim", notes: null, tags: ["alpha", "beta"] },
-      "Some body text.",
-    );
-    const { frontmatter: fm1, body: b1 } = parseFrontmatter<Record<string, unknown>>(original);
-    const reserialized = serializeFrontmatter(fm1, b1);
-    const { frontmatter: fm2, body: b2 } = parseFrontmatter<Record<string, unknown>>(reserialized);
-    expect(b1).toBe(b2);
-    expect(fm2.status).toBe(fm1.status);
-    expect(fm2.assignee).toBe(fm1.assignee);
-    // null fields may not survive the yaml round-trip as null — only check body equality
-  });
-});
-
-// ─── extractSection ───────────────────────────────────────────────────────────
-
-describe("extractSection", () => {
-  const doc = [
-    "## Objective",
-    "",
-    "Build the thing.",
-    "",
-    "## Background",
-    "",
-    "It needs to be built because reasons.",
-    "",
-    "## Last Section",
-    "",
-    "No following heading here.",
-  ].join("\n");
-
-  it("extracts the body of a named section", () => {
-    const result = extractSection(doc, "Objective");
-    expect(result).toBe("Build the thing.");
-  });
-
-  it("stops at the next ## heading", () => {
-    const result = extractSection(doc, "Background");
-    expect(result).not.toContain("Last Section");
-    expect(result).toBe("It needs to be built because reasons.");
-  });
-
-  it("works on the last section (no following heading)", () => {
-    const result = extractSection(doc, "Last Section");
-    expect(result).toBe("No following heading here.");
-  });
-
-  it("returns empty string when section is not found", () => {
-    expect(extractSection(doc, "Nonexistent")).toBe("");
   });
 });
 

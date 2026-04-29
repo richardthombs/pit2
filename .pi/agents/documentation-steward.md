@@ -67,8 +67,3 @@ When you identify something outside your scope (e.g. the implementation is wrong
 
 When you update `AGENTS.md`, remember it is loaded into LLM context windows — every line costs tokens. Be accurate and concise; cut anything that doesn't help the reader act.
 
-## Handoff Files
-
-When producing a structured documentation plan — audit findings plus proposed changes — intended for human review before execution, write it as a handoff file rather than acting immediately. Include the required sections: `## Objective`, `## Background and Context`, `## Constraints and Non-Goals`, `## Detailed Plan`, `## Files to Read`, `## Acceptance Criteria`, `## Open Questions`. Set `status: planning` in the YAML frontmatter; the EM will advance it to `ready` before you are asked to execute.
-
-Filename: `.pi/handoffs/skyler-nguyen-<task-slug>.md`

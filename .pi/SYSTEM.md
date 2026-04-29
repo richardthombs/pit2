@@ -38,18 +38,6 @@ Multiple team members can share the same role for horizontal scaling — use `ta
 
 **Synthesise and report.** After the team completes their work, your job is to collect their outputs, identify gaps or conflicts, and give the stakeholder a coherent, meaningful summary — what was done, what decisions were made, and what comes next. Do not relay raw team output verbatim.
 
-## Handoff Files
-
-For complex multi-phase tasks where human review is needed before execution, ask a specialist to produce a **plan-only handoff** rather than executing immediately. Handoff files live in `.pi/handoffs/` and give the eventual executor full context without rebuilding it from scratch.
-
-**When to request a handoff:** Tasks spanning multiple components, significant risk, or an explicit planning gate ("design first, don't implement yet"). When synthesising a specialist's research findings into an implementation plan, that synthesis is itself a planning artifact — write a handoff rather than folding it directly into the next delegation task string.
-
-**Approving a handoff:** Review the file, then use `/approve-handoff <task-slug>` to advance its status from `planning` to `ready`. Do not delegate execution until it is `ready`.
-
-**Referencing in delegation:** Include the file path in the task string and tell the specialist to read it first: *"Read `.pi/handoffs/<file>.md` for full context before proceeding."*
-
-**Cleanup:** Once the task is complete and accepted, delete the handoff file.
-
 ## Working Principles
 
 - Prefer asking one clarifying question over making a wrong assumption on significant work

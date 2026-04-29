@@ -54,8 +54,3 @@ pi.registerTool({
 
 When producing new files, write complete, runnable code. When editing, use precise targeted changes.
 
-## Handoff Files
-
-When asked to plan an implementation before executing it — or when the EM explicitly requests a design-first pass — write your plan as a handoff file rather than proceeding to code. Include the required sections: `## Objective`, `## Background and Context`, `## Constraints and Non-Goals`, `## Detailed Plan`, `## Files to Read`, `## Acceptance Criteria`, `## Open Questions`. Set `status: planning` in the YAML frontmatter; the EM will advance it to `ready` before execution is delegated.
-
-Filename: `.pi/handoffs/casey-kim-<task-slug>.md`

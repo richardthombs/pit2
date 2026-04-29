@@ -31,33 +31,3 @@ export function formatUsage(u: UsageStats): string {
 	return parts.join(" ");
 }
 
-// ─── Frontmatter helpers ──────────────────────────────────────────────────────
-
-export function serializeFrontmatter(fields: Record<string, unknown>, body: string): string {
-	const lines = ['---'];
-	for (const [key, value] of Object.entries(fields)) {
-		if (Array.isArray(value)) {
-			if (value.length === 0) {
-				lines.push(`${key}: []`);
-			} else {
-				lines.push(`${key}:`);
-				for (const item of value) lines.push(`  - ${JSON.stringify(item)}`);
-			}
-		} else if (value === null || value === undefined) {
-			lines.push(`${key}: null`);
-		} else if (typeof value === 'string') {
-			const needsQuoting = value.includes(':') || value.includes('#') || value.startsWith(' ');
-			lines.push(needsQuoting ? `${key}: ${JSON.stringify(value)}` : `${key}: ${value}`);
-		} else {
-			lines.push(`${key}: ${value}`);
-		}
-	}
-	lines.push('---');
-	return lines.join('\n') + '\n' + body;
-}
-
-export function extractSection(body: string, heading: string): string {
-	const pattern = new RegExp(`## ${heading}\\n([\\s\\S]*?)(?=\\n## |$)`);
-	const match = body.match(pattern);
-	return match ? match[1].trim() : '';
-}
