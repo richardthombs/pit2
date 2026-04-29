@@ -781,6 +781,78 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
+	// ── hire tool ───────────────────────────────────────────────────────────────
+
+	pi.registerTool({
+		name: "hire",
+		label: "Hire",
+		description: "Hire a new team member into a role. Use /roles to see available roles.",
+		promptSnippet: "Hire a new team member into a role",
+		parameters: Type.Object({
+			role: Type.String({ description: "Role name to hire for (e.g. 'typescript-engineer'). Must match a file in .pi/agents/." }),
+		}),
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			const config = loadAgentConfig(ctx.cwd, params.role);
+			if (!config) {
+				const available = listAvailableRoles(ctx.cwd).join(", ") || "none";
+				throw new Error(`Role "${params.role}" not found. Available: ${available}`);
+			}
+			const roster = loadRoster(ctx.cwd);
+			const name = pickUnusedName(roster.usedNames);
+			if (!name) throw new Error("Name pool exhausted — maximum team size reached.");
+
+			const member: TeamMember = {
+				id: nameToId(name),
+				name,
+				role: params.role,
+				hiredAt: new Date().toISOString(),
+			};
+			roster.members.push(member);
+			roster.usedNames.push(name);
+			await saveRoster(ctx.cwd, roster);
+			memberState.set(name, { status: "idle" });
+			updateWidget(ctx);
+
+			return {
+				content: [{ type: "text", text: `Hired ${name} as ${params.role}.` }],
+				details: { member },
+			};
+		},
+	});
+
+	// ── fire tool ─────────────────────────────────────────────────────────────────
+
+	pi.registerTool({
+		name: "fire",
+		label: "Fire",
+		description: "Remove a team member. Their name is permanently retired from the name pool.",
+		promptSnippet: "Remove a team member from the roster",
+		parameters: Type.Object({
+			member: Type.String({ description: "Full name of the team member to remove (e.g. 'Casey Kim')." }),
+		}),
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			const roster = loadRoster(ctx.cwd);
+			const idx = roster.members.findIndex(
+				m => m.name.toLowerCase() === params.member.toLowerCase()
+			);
+			if (idx === -1) {
+				const names = roster.members.map(m => m.name).join(", ") || "none";
+				throw new Error(`"${params.member}" not found. Current team: ${names}`);
+			}
+			const member = roster.members[idx];
+			roster.members.splice(idx, 1);
+			// Name stays in usedNames — permanently retired
+			await saveRoster(ctx.cwd, roster);
+			memberState.delete(member.name);
+			updateWidget(ctx);
+
+			return {
+				content: [{ type: "text", text: `${member.name} (${member.role}) has left the team.` }],
+				details: { member },
+			};
+		},
+	});
+
 	// ── delegate tool ──────────────────────────────────────────────────────────
 
 	pi.registerTool({
