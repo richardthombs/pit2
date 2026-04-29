@@ -1,0 +1,48 @@
+{
+  "members": [
+    {
+      "id": "alex-rivera",
+      "name": "Alex Rivera",
+      "role": "software-architect",
+      "hiredAt": "2026-04-29T00:00:00Z"
+    },
+    {
+      "id": "sam-chen",
+      "name": "Sam Chen",
+      "role": "pi-specialist",
+      "hiredAt": "2026-04-29T00:00:00Z"
+    },
+    {
+      "id": "jordan-blake",
+      "name": "Jordan Blake",
+      "role": "prompt-engineer",
+      "hiredAt": "2026-04-29T00:00:00Z"
+    },
+    {
+      "id": "casey-kim",
+      "name": "Casey Kim",
+      "role": "typescript-engineer",
+      "hiredAt": "2026-04-29T00:00:00Z"
+    },
+    {
+      "id": "morgan-ellis",
+      "name": "Morgan Ellis",
+      "role": "qa-engineer",
+      "hiredAt": "2026-04-29T00:00:00Z"
+    },
+    {
+      "id": "riley-torres",
+      "name": "Riley Torres",
+      "role": "technical-writer",
+      "hiredAt": "2026-04-29T00:00:00Z"
+    }
+  ],
+  "usedNames": [
+    "Alex Rivera",
+    "Sam Chen",
+    "Jordan Blake",
+    "Casey Kim",
+    "Morgan Ellis",
+    "Riley Torres"
+  ]
+}
