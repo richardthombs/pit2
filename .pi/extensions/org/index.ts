@@ -364,6 +364,10 @@ const DelegateParams = Type.Object({
 			description: "Run multiple tasks in parallel. Max 8.",
 		}),
 	),
+	// Async mode
+	async: Type.Optional(Type.Boolean({
+		description: "If true, start tasks in background and return immediately. Results are delivered into the conversation when each task completes. Default: false (blocking).",
+	})),
 	// Chain mode
 	chain: Type.Optional(
 		Type.Array(
@@ -472,6 +476,11 @@ export default function (pi: ExtensionAPI) {
 			memberTimers.delete(memberName);
 		}, 5 * 60 * 1000);
 		memberTimers.set(memberName, timer);
+	}
+
+	function deliverResult(memberName: string, roleName: string, content: string): void {
+		const header = `Background task completed — **${memberName}** (${roleName}):\n\n`;
+		pi.sendUserMessage(header + content, { deliverAs: "followUp" });
 	}
 
 	function updateWidget(ctx: any): void {
@@ -661,6 +670,7 @@ export default function (pi: ExtensionAPI) {
 			"Parallel: { tasks: [{member|role, task}] } — up to 8 concurrent.",
 			"Chain: { chain: [{member|role, task}] } — sequential, supports {previous} placeholder.",
 			"Use /team to see the roster and /roles to see available roles.",
+			"Add async: true to fire in background and return immediately — results are delivered into the conversation when complete.",
 		].join(" "),
 		parameters: DelegateParams,
 
@@ -701,6 +711,149 @@ export default function (pi: ExtensionAPI) {
 					return { member: m, config };
 				}
 				return { error: "Specify either member name or role." };
+			}
+
+			// ── Async: single mode ──────────────────────────────────────────
+			if (params.async && params.task) {
+				const r = resolve(params.member, params.role);
+				if ("error" in r) {
+					return { content: [{ type: "text", text: r.error }], details: {}, isError: true };
+				}
+				memberState.set(r.member.name, { status: "working", task: params.task });
+				updateWidget(ctx);
+
+				runTask(r.config, r.member.name, params.task, params.cwd ?? ctx.cwd, signal)
+					.then(result => {
+						const status = result.exitCode === 0 ? "done" : "error";
+						memberState.set(r.member.name, { status, task: params.task });
+						accumulateUsage(r.member.name, result.usage);
+						if (result.exitCode === 0) {
+							scheduleDoneReset(r.member.name);
+						}
+						updateWidget(ctx);
+						const content = result.exitCode === 0
+							? result.output
+							: `Error:\n${result.output || result.stderr || "(no output)"}`;
+						deliverResult(r.member.name, r.config.name, content);
+					})
+					.catch(err => {
+						memberState.set(r.member.name, { status: "error", task: params.task });
+						updateWidget(ctx);
+						deliverResult(r.member.name, r.config.name, `Task threw unexpectedly: ${err?.message ?? err}`);
+					});
+
+				return {
+					content: [{ type: "text", text: `Task started in background — ${r.member.name} is working.` }],
+					details: {},
+				};
+			}
+
+			// ── Async: parallel mode ──────────────────────────────────────────
+			if (params.async && params.tasks?.length) {
+				if (params.tasks.length > 8) {
+					return { content: [{ type: "text", text: "Maximum 8 parallel tasks." }], details: {}, isError: true };
+				}
+
+				let started = 0;
+				for (const [i, t] of params.tasks.entries()) {
+					const r = resolve(t.member, t.role);
+					if ("error" in r) {
+						deliverResult(t.member ?? t.role ?? `task ${i + 1}`, "unknown", `Could not start: ${r.error}`);
+						continue;
+					}
+					memberState.set(r.member.name, { status: "working", task: t.task });
+					started++;
+
+					runTask(r.config, r.member.name, t.task, t.cwd ?? ctx.cwd, signal)
+						.then(result => {
+							const status = result.exitCode === 0 ? "done" : "error";
+							memberState.set(r.member.name, { status, task: t.task });
+							accumulateUsage(r.member.name, result.usage);
+							if (result.exitCode === 0) {
+								scheduleDoneReset(r.member.name);
+							}
+							updateWidget(ctx);
+							const content = result.exitCode === 0
+								? result.output
+								: `Error:\n${result.output || result.stderr || "(no output)"}`;
+							deliverResult(r.member.name, r.config.name, content);
+						})
+						.catch(err => {
+							memberState.set(r.member.name, { status: "error", task: t.task });
+							updateWidget(ctx);
+							deliverResult(r.member.name, r.config.name, `Task threw unexpectedly: ${err?.message ?? err}`);
+						});
+				}
+
+				updateWidget(ctx);
+				return {
+					content: [{ type: "text", text: `${started} task(s) started in background.` }],
+					details: {},
+				};
+			}
+
+			// ── Async: chain mode ─────────────────────────────────────────────
+			if (params.async && params.chain?.length) {
+				const chainLength = params.chain.length;
+
+				(async () => {
+					let previous = "";
+					const sections: string[] = [];
+
+					for (let i = 0; i < chainLength; i++) {
+						const step = params.chain![i];
+						const r = resolve(step.member, step.role);
+						if ("error" in r) {
+							deliverResult("Chain", "error", `Step ${i + 1} failed to resolve: ${r.error}`);
+							return;
+						}
+
+						const task = step.task.replace(/\{previous\}/g, previous);
+						memberState.set(r.member.name, { status: "working", task });
+						updateWidget(ctx);
+
+						let result: RunResult;
+						try {
+							result = await runTask(r.config, r.member.name, task, step.cwd ?? ctx.cwd, signal);
+						} catch (err: any) {
+							memberState.set(r.member.name, { status: "error", task });
+							updateWidget(ctx);
+							deliverResult("Chain", "error", `Step ${i + 1} (${r.member.name}) threw: ${err?.message ?? err}`);
+							return;
+						}
+
+						if (result.exitCode !== 0) {
+							memberState.set(r.member.name, { status: "error", task });
+							updateWidget(ctx);
+							deliverResult("Chain", "error",
+								`Chain stopped at step ${i + 1} (${r.member.name}):\n${result.output || result.stderr || "(no output)"}`
+							);
+							return;
+						}
+
+						memberState.set(r.member.name, { status: "done", task });
+						accumulateUsage(r.member.name, result.usage);
+						scheduleDoneReset(r.member.name);
+						updateWidget(ctx);
+						previous = result.output;
+						sections.push(`## Step ${i + 1}: ${r.member.name} (${r.config.name})\n\n${result.output}`);
+					}
+
+					pi.sendUserMessage(
+						`Background chain completed (${chainLength} steps):\n\n${sections.join("\n\n---\n\n")}`,
+						{ deliverAs: "followUp" }
+					);
+				})().catch(err => {
+					pi.sendUserMessage(
+						`Background chain failed unexpectedly: ${err?.message ?? err}`,
+						{ deliverAs: "followUp" }
+					);
+				});
+
+				return {
+					content: [{ type: "text", text: `Chain of ${chainLength} steps started in background.` }],
+					details: {},
+				};
 			}
 
 			// ── Chain mode ────────────────────────────────────────────────────
