@@ -430,6 +430,8 @@ interface MemberState {
 export default function (pi: ExtensionAPI) {
 	const memberState = new Map<string, MemberState>();
 	const memberUsage = new Map<string, UsageStats>();
+	const memberTimers = new Map<string, ReturnType<typeof setTimeout>>();
+	let lastCtx: any = null;
 
 	function accumulateUsage(memberName: string, delta: UsageStats): void {
 		const existing = memberUsage.get(memberName) ?? {
@@ -461,7 +463,7 @@ export default function (pi: ExtensionAPI) {
 		return parts.join(" ");
 	}
 
-	function buildWidgetLines(cwd: string): string[] {
+	function buildWidgetLines(cwd: string, width: number = 120): string[] {
 		const roster = loadRoster(cwd);
 		const lines: string[] = ["  Engineering Manager"];
 
@@ -471,10 +473,10 @@ export default function (pi: ExtensionAPI) {
 		}
 
 		const STATUS_SYMBOLS: Record<MemberStatus, string> = {
-			idle: "●",
-			working: "🏃",
-			done: "✓",
-			error: "✗",
+			idle:    "○",
+			working: "●",
+			done:    "✓",
+			error:   "✗",
 		};
 
 		roster.members.forEach((m, i) => {
@@ -482,17 +484,22 @@ export default function (pi: ExtensionAPI) {
 			const prefix = isLast ? "  └─ " : "  ├─ ";
 			const state = memberState.get(m.name) ?? { status: "idle" };
 			const symbol = STATUS_SYMBOLS[state.status];
-			const taskNote =
-				state.task && state.status !== "idle"
-					? `: ${state.task.length > 40 ? state.task.slice(0, 40) + "…" : state.task}`
-					: "";
 			const namePart = m.name.padEnd(20);
 			const rolePart = m.role.padEnd(22);
 			const usage = memberUsage.get(m.name);
-			const usageNote = usage && (usage.input > 0 || usage.output > 0)
+			const usageStr = usage && (usage.input > 0 || usage.output > 0)
 				? `  ${formatUsage(usage)}`
 				: "";
-			lines.push(`${prefix}${namePart}${rolePart}${symbol} ${state.status}${taskNote}${usageNote}`);
+			const fixed = prefix.length + 20 + 22 + 1 + 1 + state.status.length;
+			const availableForTask = width - fixed - usageStr.length - 2;
+			let taskNote = "";
+			if (state.task && state.status !== "idle" && availableForTask > 3) {
+				const snippet = state.task.length > availableForTask
+					? state.task.slice(0, availableForTask) + "…"
+					: state.task;
+				taskNote = `: ${snippet}`;
+			}
+			lines.push(`${prefix}${namePart}${rolePart}${symbol} ${state.status}${taskNote}${usageStr}`);
 		});
 
 		return lines;
@@ -500,10 +507,29 @@ export default function (pi: ExtensionAPI) {
 
 	let rosterWatcher: fs.FSWatcher | null = null;
 
+	function scheduleDoneReset(memberName: string): void {
+		const existing = memberTimers.get(memberName);
+		if (existing) clearTimeout(existing);
+		const timer = setTimeout(() => {
+			const state = memberState.get(memberName);
+			if (state?.status === "done") {
+				memberState.set(memberName, { status: "idle" });
+				if (lastCtx) updateWidget(lastCtx);
+			}
+			memberTimers.delete(memberName);
+		}, 5 * 60 * 1000);
+		memberTimers.set(memberName, timer);
+	}
+
 	function updateWidget(ctx: any): void {
 		if (!ctx?.hasUI) return;
-		const lines = buildWidgetLines(ctx.cwd);
-		ctx.ui.setWidget("org-team", lines, { placement: "belowEditor" });
+		lastCtx = ctx;
+		ctx.ui.setWidget("org-team", (_tui: any, _theme: any) => ({
+			render(width: number): string[] {
+				return buildWidgetLines(ctx.cwd, width);
+			},
+			invalidate() {}
+		}), { placement: "belowEditor" });
 	}
 
 	// Show roster on startup and watch roster.json for external changes
@@ -512,6 +538,7 @@ export default function (pi: ExtensionAPI) {
 		// Reset all state to idle on (re)start
 		memberState.clear();
 		memberUsage.clear();
+		memberTimers.clear();
 		const roster = loadRoster(ctx.cwd);
 		if (roster.members.length > 0) {
 			const lines = roster.members.map((m) => `  • ${m.name} (${m.role})`).join("\n");
@@ -534,6 +561,8 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_shutdown", async () => {
 		rosterWatcher?.close();
 		rosterWatcher = null;
+		for (const timer of memberTimers.values()) clearTimeout(timer);
+		memberTimers.clear();
 	});
 
 	// ── /team ──────────────────────────────────────────────────────────────────
@@ -878,6 +907,7 @@ export default function (pi: ExtensionAPI) {
 					}
 
 					memberState.set(r.member.name, { status: "done", task });
+					scheduleDoneReset(r.member.name);
 					accumulateUsage(r.member.name, result.usage);
 					updateWidget(ctx);
 					previous = result.output;
@@ -934,6 +964,7 @@ export default function (pi: ExtensionAPI) {
 							status: result.exitCode === 0 ? "done" : "error",
 							task: t.task,
 						});
+						if (result.exitCode === 0) scheduleDoneReset(r.member.name);
 						accumulateUsage(r.member.name, result.usage);
 						updateWidget(ctx);
 						return { name: r.member.name, output: result.output, exitCode: result.exitCode };
@@ -999,6 +1030,7 @@ export default function (pi: ExtensionAPI) {
 				}
 
 				memberState.set(r.member.name, { status: "done", task: params.task });
+				scheduleDoneReset(r.member.name);
 				accumulateUsage(r.member.name, result.usage);
 				updateWidget(ctx);
 				return {
