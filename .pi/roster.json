@@ -41,6 +41,12 @@
       "name": "Avery Walsh",
       "role": "release-engineer",
       "hiredAt": "2026-04-29T16:00:00.000Z"
+    },
+    {
+      "id": "reese-kapoor",
+      "name": "Reese Kapoor",
+      "role": "beads-specialist",
+      "hiredAt": "2026-04-29T20:43:45.411Z"
     }
   ],
   "usedNames": [
@@ -51,6 +57,7 @@
     "Morgan Ellis",
     "Riley Torres",
     "Skyler Nguyen",
-    "Avery Walsh"
+    "Avery Walsh",
+    "Reese Kapoor"
   ]
 }
