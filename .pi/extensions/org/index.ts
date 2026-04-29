@@ -359,16 +359,69 @@ const DelegateParams = Type.Object({
 	),
 });
 
+// ─── Team state & widget ─────────────────────────────────────────────────────
+
+type MemberStatus = "idle" | "working" | "done" | "error";
+interface MemberState {
+	status: MemberStatus;
+	task?: string; // brief snippet of current/last task
+}
+
 // ─── Extension ────────────────────────────────────────────────────────────────
 
 export default function (pi: ExtensionAPI) {
+	const memberState = new Map<string, MemberState>();
+
+	function buildWidgetLines(cwd: string): string[] {
+		const roster = loadRoster(cwd);
+		const lines: string[] = ["  Engineering Manager", "  │"];
+
+		if (roster.members.length === 0) {
+			lines.push("  └─ (no team members — use /hire <role>)");
+			return lines;
+		}
+
+		const STATUS_SYMBOLS: Record<MemberStatus, string> = {
+			idle: "●",
+			working: "◎",
+			done: "✓",
+			error: "✗",
+		};
+
+		roster.members.forEach((m, i) => {
+			const isLast = i === roster.members.length - 1;
+			const prefix = isLast ? "  └─ " : "  ├─ ";
+			const state = memberState.get(m.name) ?? { status: "idle" };
+			const symbol = STATUS_SYMBOLS[state.status];
+			const taskNote =
+				state.task && state.status !== "idle"
+					? `: ${state.task.length > 40 ? state.task.slice(0, 40) + "…" : state.task}`
+					: "";
+			const namePart = m.name.padEnd(20);
+			const rolePart = m.role.padEnd(22);
+			lines.push(`${prefix}${namePart}${rolePart}${symbol} ${state.status}${taskNote}`);
+		});
+
+		return lines;
+	}
+
+	function updateWidget(ctx: any): void {
+		if (!ctx?.hasUI) return;
+		const lines = buildWidgetLines(ctx.cwd);
+		ctx.ui.setWidget("org-team", lines, { placement: "belowEditor" });
+	}
+
 	// Show roster on startup
 	pi.on("session_start", async (event, ctx) => {
-		if (event.reason !== "startup" && event.reason !== "resume") return;
+		if (event.reason !== "startup" && event.reason !== "resume" && event.reason !== "reload") return;
+		// Reset all state to idle on (re)start
+		memberState.clear();
 		const roster = loadRoster(ctx.cwd);
-		if (roster.members.length === 0) return;
-		const lines = roster.members.map((m) => `  • ${m.name} (${m.role})`).join("\n");
-		ctx.ui.notify(`Your team:\n${lines}`, "info");
+		if (roster.members.length > 0) {
+			const lines = roster.members.map((m) => `  • ${m.name} (${m.role})`).join("\n");
+			ctx.ui.notify(`Your team:\n${lines}`, "info");
+		}
+		updateWidget(ctx);
 	});
 
 	// ── /team ──────────────────────────────────────────────────────────────────
@@ -454,10 +507,12 @@ export default function (pi: ExtensionAPI) {
 			roster.usedNames.push(name);
 			await saveRoster(ctx.cwd, roster);
 
+			memberState.set(name, { status: "idle" });
 			ctx.ui.notify(
 				`Welcome aboard, ${name}!\nRole: ${roleName}\n${config.description}`,
 				"success",
 			);
+			updateWidget(ctx);
 		},
 	});
 
@@ -495,7 +550,9 @@ export default function (pi: ExtensionAPI) {
 			roster.members.splice(idx, 1);
 			// Keep name in usedNames so it won't be re-assigned
 			await saveRoster(ctx.cwd, roster);
+			memberState.delete(member.name);
 			ctx.ui.notify(`${member.name} has left the team.`, "info");
+			updateWidget(ctx);
 		},
 	});
 
@@ -569,6 +626,8 @@ export default function (pi: ExtensionAPI) {
 					}
 
 					const task = step.task.replace(/\{previous\}/g, previous);
+					memberState.set(r.member.name, { status: "working", task });
+					updateWidget(ctx);
 					onUpdate?.({
 						content: [
 							{
@@ -598,6 +657,8 @@ export default function (pi: ExtensionAPI) {
 					);
 
 					if (result.exitCode !== 0) {
+						memberState.set(r.member.name, { status: "error", task });
+						updateWidget(ctx);
 						return {
 							content: [
 								{
@@ -610,6 +671,8 @@ export default function (pi: ExtensionAPI) {
 						};
 					}
 
+					memberState.set(r.member.name, { status: "done", task });
+					updateWidget(ctx);
 					previous = result.output;
 					sections.push(
 						`## Step ${i + 1}: ${r.member.name} (${r.config.name})\n\n${result.output}`,
@@ -642,6 +705,8 @@ export default function (pi: ExtensionAPI) {
 								exitCode: 1,
 							};
 						}
+						memberState.set(r.member.name, { status: "working", task: t.task });
+						updateWidget(ctx);
 						onUpdate?.({
 							content: [
 								{
@@ -658,6 +723,11 @@ export default function (pi: ExtensionAPI) {
 							t.cwd ?? ctx.cwd,
 							signal,
 						);
+						memberState.set(r.member.name, {
+							status: result.exitCode === 0 ? "done" : "error",
+							task: t.task,
+						});
+						updateWidget(ctx);
 						return { name: r.member.name, output: result.output, exitCode: result.exitCode };
 					}),
 				);
@@ -685,6 +755,8 @@ export default function (pi: ExtensionAPI) {
 					return { content: [{ type: "text", text: r.error }], details: {}, isError: true };
 				}
 
+				memberState.set(r.member.name, { status: "working", task: params.task });
+				updateWidget(ctx);
 				onUpdate?.({
 					content: [{ type: "text", text: `${r.member.name} starting task…` }],
 					details: {},
@@ -704,6 +776,8 @@ export default function (pi: ExtensionAPI) {
 				);
 
 				if (result.exitCode !== 0) {
+					memberState.set(r.member.name, { status: "error", task: params.task });
+					updateWidget(ctx);
 					return {
 						content: [
 							{
@@ -716,6 +790,8 @@ export default function (pi: ExtensionAPI) {
 					};
 				}
 
+				memberState.set(r.member.name, { status: "done", task: params.task });
+				updateWidget(ctx);
 				return {
 					content: [
 						{
