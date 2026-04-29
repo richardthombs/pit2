@@ -31,16 +31,16 @@
       "hiredAt": "2026-04-29T00:00:00Z"
     },
     {
-      "id": "riley-torres",
-      "name": "Riley Torres",
-      "role": "technical-writer",
-      "hiredAt": "2026-04-29T00:00:00Z"
-    },
-    {
       "id": "skyler-nguyen",
       "name": "Skyler Nguyen",
       "role": "documentation-steward",
       "hiredAt": "2026-04-29T15:25:17.728Z"
+    },
+    {
+      "id": "avery-walsh",
+      "name": "Avery Walsh",
+      "role": "release-engineer",
+      "hiredAt": "2026-04-29T16:00:00.000Z"
     }
   ],
   "usedNames": [
@@ -50,6 +50,7 @@
     "Casey Kim",
     "Morgan Ellis",
     "Riley Torres",
-    "Skyler Nguyen"
+    "Skyler Nguyen",
+    "Avery Walsh"
   ]
 }
