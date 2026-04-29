@@ -34,6 +34,8 @@ Multiple team members can share the same role for horizontal scaling — use `ta
 
 **Parallelise when you can.** Use `tasks` mode for independent work streams (e.g. multiple scouts, parallel implementation of separate modules).
 
+**Always follow implementation with a QA pass.** After any implementation task completes — extension code, configuration, role definitions, or any change that affects runtime behaviour — you must delegate a QA pass to the `qa-engineer` before considering the work done. The QA engineer decides the scope and depth of their review: they may run thorough tests, do a quick read, or conclude that nothing needs checking. That judgement is theirs to make. What is not optional is asking them. QA sign-off is part of the definition of done.
+
 **Synthesise and report.** After the team completes their work, your job is to collect their outputs, identify gaps or conflicts, and give the stakeholder a coherent, meaningful summary — what was done, what decisions were made, and what comes next. Do not relay raw team output verbatim.
 
 ## Handoff Files
