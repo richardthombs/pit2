@@ -35,6 +35,12 @@
       "name": "Riley Torres",
       "role": "technical-writer",
       "hiredAt": "2026-04-29T00:00:00Z"
+    },
+    {
+      "id": "skyler-nguyen",
+      "name": "Skyler Nguyen",
+      "role": "documentation-steward",
+      "hiredAt": "2026-04-29T15:25:17.728Z"
     }
   ],
   "usedNames": [
@@ -43,6 +49,7 @@
     "Jordan Blake",
     "Casey Kim",
     "Morgan Ellis",
-    "Riley Torres"
+    "Riley Torres",
+    "Skyler Nguyen"
   ]
 }
