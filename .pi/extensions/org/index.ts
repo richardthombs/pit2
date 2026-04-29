@@ -23,6 +23,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { parseFrontmatter, withFileMutationQueue } from "@mariozechner/pi-coding-agent";
+import { truncateToWidth } from "@mariozechner/pi-tui";
 import { Type } from "typebox";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -502,7 +503,7 @@ export default function (pi: ExtensionAPI) {
 			lines.push(`${prefix}${namePart}${rolePart}${symbol} ${state.status}${taskNote}${usageStr}`);
 		});
 
-		return lines;
+		return lines.map(line => truncateToWidth(line, width));
 	}
 
 	let rosterWatcher: fs.FSWatcher | null = null;
