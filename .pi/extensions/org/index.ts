@@ -493,11 +493,13 @@ export default function (pi: ExtensionAPI) {
 				: "";
 			const fixed = prefix.length + 20 + 22 + 1 + 1 + state.status.length;
 			const availableForTask = width - fixed - usageStr.length - 2;
+			const rawTask = state.task ?? "";
+			const sanitizedTask = rawTask.replace(/[\r\n\t]+/g, " ").replace(/\s{2,}/g, " ").trim();
 			let taskNote = "";
-			if (state.task && state.status !== "idle" && availableForTask > 3) {
-				const snippet = state.task.length > availableForTask
-					? state.task.slice(0, availableForTask) + "…"
-					: state.task;
+			if (sanitizedTask && state.status !== "idle" && availableForTask > 3) {
+				const snippet = sanitizedTask.length > availableForTask
+					? sanitizedTask.slice(0, availableForTask) + "…"
+					: sanitizedTask;
 				taskNote = `: ${snippet}`;
 			}
 			lines.push(`${prefix}${namePart}${rolePart}${symbol} ${state.status}${taskNote}${usageStr}`);
