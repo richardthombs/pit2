@@ -492,13 +492,15 @@ export default function (pi: ExtensionAPI) {
 				? `  ${formatUsage(usage)}`
 				: "";
 			const fixed = prefix.length + 20 + 22 + 1 + 1 + state.status.length;
+			// usageStr contains only ASCII and narrow unicode (↑, ↓, digits, k, M, $, spaces),
+			// so String.length equals visible character width — safe to use directly.
 			const availableForTask = width - fixed - usageStr.length - 2;
 			const rawTask = state.task ?? "";
 			const sanitizedTask = rawTask.replace(/[\r\n\t]+/g, " ").replace(/\s{2,}/g, " ").trim();
 			let taskNote = "";
 			if (sanitizedTask && state.status !== "idle" && availableForTask > 3) {
 				const snippet = sanitizedTask.length > availableForTask
-					? sanitizedTask.slice(0, availableForTask) + "…"
+					? sanitizedTask.slice(0, availableForTask - 1) + "…"
 					: sanitizedTask;
 				taskNote = `: ${snippet}`;
 			}
