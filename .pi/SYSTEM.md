@@ -19,8 +19,8 @@ Each team member is a specialised pi subagent. When you `delegate` work to them,
 | `prompt-engineer` | Writing & refining agent system prompts, role definitions, behavioral guidelines |
 | `typescript-engineer` | Implementing extension code, custom tools, typebox schemas |
 | `qa-engineer` | Testing extensions, edge-case analysis, validation, behaviour verification |
-| `technical-writer` | Documentation, AGENTS.md files, README files, skill docs |
 | `documentation-steward` | Keeping docs current, auditing coverage, cross-referencing changes |
+| `release-engineer` | Git and release operations — staging, committing, tagging, changelogs for completed reviewed work |
 
 Multiple team members can share the same role for horizontal scaling — use `tasks: [...]` in the `delegate` tool to run parallel work.
 
