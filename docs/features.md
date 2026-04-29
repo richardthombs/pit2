@@ -290,12 +290,12 @@ Design the public interface for the authentication module before implementation 
 
 | Symbol | State | Meaning |
 |---|---|---|
-| `●` | idle | No current task |
-| `◎` | working | Task in progress |
+| `○` | idle | No current task |
+| `●` | working | Task in progress |
 | `✓` | done | Last task completed successfully |
 | `✗` | error | Last task failed |
 
-**Task preview:** While working, done, or errored, a truncated snippet of the task description (up to 40 characters) is shown next to the status.
+**Task preview:** While working, done, or errored, a snippet of the task description is shown next to the status. The snippet auto-sizes to fill all remaining terminal width after the fixed columns (prefix, name, role, status, usage), truncating with `…` if it overflows. The snippet is omitted entirely if there is not enough room.
 
 **When it updates:**
 - On session start or resume (all members reset to `idle`)
@@ -303,7 +303,11 @@ Design the public interface for the authentication module before implementation 
 - When a member is hired or fired
 - When `roster.json` is modified externally (watched via `fs.watch`)
 
-**Behaviour on restart:** All members are reset to `idle` on session start, regardless of prior state.
+**Done→idle auto-reset:** Members in the `done` state automatically return to `idle` after 5 minutes of inactivity. Members in `working` or `error` state are not affected.
+
+**Reset timer lifecycle:** The 5-minute timer is per-member. If a member completes a second task while their timer is still running, the timer resets from that point. Timers are cleared on session reload or restart.
+
+**Behaviour on restart:** All members are reset to `idle` on session start, regardless of prior state. Any pending done→idle timers are also cleared.
 
 ---
 
