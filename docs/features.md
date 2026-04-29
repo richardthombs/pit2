@@ -295,6 +295,53 @@ Token counts are formatted with `k`/`M` suffixes (e.g. `12.3k`, `1.2M`). Fields 
 
 ---
 
+## Per-role memory
+
+**What it does:** Gives selected roles a persistent memory that carries forward across delegations. Each time a memory-enabled role completes a task, it can record new facts — conventions, decisions, pitfalls, codebase landmarks — and those facts are automatically included in the agent's context on the next delegation. Memory accumulates over time, so roles become progressively better-informed about the project.
+
+**Opt-in:** Memory is not enabled for all roles. The roles that currently participate are: `typescript-engineer`, `software-architect`, `qa-engineer`, `prompt-engineer`, and `pi-specialist`. The `documentation-steward` and `technical-writer` roles do not use memory because their output tends to be project-specific rather than role-reusable knowledge.
+
+**Memory file location:** `.pi/memory/<role-name>.md` — one file per role, shared by all members of that role. Files are created automatically on the first write; no setup is needed.
+
+**How memory is injected:** When a delegation is dispatched to a memory-enabled role, if a memory file exists for that role, its contents are appended to the agent's system prompt under a `## Role Memory` heading. The agent sees this as background context for the task.
+
+**How agents write memory:** Agents surface new memories by emitting a structured comment block at the end of their response:
+
+```
+<!-- MEMORY
+section: Conventions
+entry: One concise sentence describing what to remember
+-->
+```
+
+The org extension strips these blocks from the output the Engineering Manager sees, and writes the entries into the memory file.
+
+**Valid sections:**
+
+| Section | What belongs here |
+|---|---|
+| `Conventions` | Code style, naming patterns, project-level norms |
+| `Decisions` | Architectural or design choices that have been made |
+| `Pitfalls` | Known failure modes, gotchas, things to avoid |
+| `EM Preferences` | How the Engineering Manager likes things done |
+| `Codebase Landmarks` | Key files, entry points, module boundaries |
+| `Miscellaneous` | Anything useful that doesn't fit the above |
+
+**Bounds:** Each section holds a maximum of 10 entries. When a section is full, the oldest entry is dropped to make room (FIFO). Total memory is targeted at approximately 500 tokens.
+
+**Memory file format:** Plain markdown with YAML frontmatter (role, version, last_updated, entry_count) followed by fixed section headings. Files are human-editable directly — you can read, correct, or prune entries by hand.
+
+**Correcting stale entries:** Agents can flag outdated knowledge by emitting a new memory entry that notes the correction. There is no explicit delete mechanism; stale entries age out naturally under the FIFO limit.
+
+**Lifecycle:**
+- Memory files are created on the first write for a role; no bootstrapping is required.
+- Firing a team member does **not** delete the role's memory file. Memory is attached to the role, not the individual. If the role is staffed again, memory resumes from where it was.
+- Memory persists across sessions — it is the only team-level state that does.
+
+**Out of scope:** Memory is not per-member — all members of the same role share one memory file. There is no way to scope memory to a specific member or task. There is no automatic summarisation; entries are stored verbatim and aged out by FIFO when the section limit is reached.
+
+---
+
 ## Name pool
 
 The system maintains a fixed pool of 30 gender-neutral names used for automatic assignment when hiring. Key properties:
