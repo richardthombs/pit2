@@ -47,6 +47,12 @@
       "name": "Mercer Lin",
       "role": "beads-specialist",
       "hiredAt": "2026-04-30T04:38:53.887Z"
+    },
+    {
+      "id": "zion-bergstrm",
+      "name": "Zion Bergström",
+      "role": "prompt-engineer",
+      "hiredAt": "2026-04-30T11:04:24.093Z"
     }
   ],
   "usedNames": [
@@ -59,6 +65,7 @@
     "Skyler Nguyen",
     "Avery Walsh",
     "Reese Kapoor",
-    "Mercer Lin"
+    "Mercer Lin",
+    "Zion Bergström"
   ]
 }
