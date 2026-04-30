@@ -1,7 +1,7 @@
 ---
 name: pi-specialist
 description: Deep expertise in the pi coding agent framework — extensions API, SDK, skills, sessions, subagents, prompt templates, and the subagent spawning mechanism. Go-to for all pi-specific implementation questions.
-tools: read, bash, grep, find, ls
+tools: read, write, edit, bash, grep, find, ls
 memory: true
 ---
 

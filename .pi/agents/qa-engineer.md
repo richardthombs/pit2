@@ -1,7 +1,7 @@
 ---
 name: qa-engineer
 description: Tests pi extensions and tools, validates extension behaviour against specifications, identifies edge cases, and verifies that implementations match their intended design.
-tools: read, bash, grep, find, ls
+tools: read, write, edit, bash, grep, find, ls
 memory: true
 ---
 

@@ -248,7 +248,15 @@ async function runTask(
 		// Per-member memory injection (always on)
 		const memPath = memberMemoryPath(cwd, memberName);
 		try {
-			let memBlock = `\n\n---\n## Your Identity & Memory\n\nYour name is ${memberName}. Your memory file is at ${memPath}.\n\nAt the start of each task, read your memory file if it exists to recall relevant context. At the end of each task, update your memory file directly using your write/edit tools to record anything useful — decisions made, pitfalls encountered, codebase landmarks discovered. You own this file; maintain it however works best for you.`;
+			const _memFallback = `\n\n---\n## Your Identity & Memory\n\nYour name is ${memberName}. Your memory file is at ${memPath}.\n\nAt the start of each task, read your memory file if it exists to recall relevant context. At the end of each task, update your memory file directly using your write/edit tools to record anything useful — decisions made, pitfalls encountered, codebase landmarks discovered. You own this file; maintain it however works best for you.`;
+			let memBlock = _memFallback;
+			try {
+				const memTemplatePath = path.join(cwd, '.pi', 'prompts', 'memory.md');
+				const template = fs.readFileSync(memTemplatePath, 'utf-8');
+				memBlock = `\n\n---\n${template.replace(/\[name\]/g, memberName).replace(/\[path\]/g, memPath)}`;
+			} catch {
+				// Template load failure is non-fatal — use hardcoded fallback
+			}
 			if (fs.existsSync(memPath)) {
 				const raw = fs.readFileSync(memPath, 'utf-8');
 				if (raw.trim()) {
