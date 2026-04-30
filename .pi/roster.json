@@ -43,10 +43,10 @@
       "hiredAt": "2026-04-29T16:00:00.000Z"
     },
     {
-      "id": "reese-kapoor",
-      "name": "Reese Kapoor",
+      "id": "mercer-lin",
+      "name": "Mercer Lin",
       "role": "beads-specialist",
-      "hiredAt": "2026-04-29T20:43:45.411Z"
+      "hiredAt": "2026-04-30T04:38:53.887Z"
     }
   ],
   "usedNames": [
@@ -58,6 +58,7 @@
     "Riley Torres",
     "Skyler Nguyen",
     "Avery Walsh",
-    "Reese Kapoor"
+    "Reese Kapoor",
+    "Mercer Lin"
   ]
 }

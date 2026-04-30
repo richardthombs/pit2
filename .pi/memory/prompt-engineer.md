@@ -1,13 +1,15 @@
 ---
 role: prompt-engineer
 version: 1
-last_updated: 2026-04-29T20:43:19.429Z
-entry_count: 4
+last_updated: 2026-04-30T04:37:54.615Z
+entry_count: 6
 ---
 
 ## Conventions
 - The beads-specialist role uses only bash and read tools (no write/edit); all task management goes through the `bd` CLI. No `memory:` frontmatter line was included per explicit request pattern — check task brief each time.
 - `bd create` uses `--description` (not `--desc`), `--type epic` (not `--epic`), and `bd prime` is a context-primer for AI agents (SessionStart hooks), not a compaction command — Dolt handles compaction internally.
+- The beads-specialist role is an expert advisor/integration architect (not an operator): no CLI reference section, no task-management responsibilities, bash is for research only (fetching source, inspecting help), and the role explicitly covers when NOT to use beads.
+- The beads-specialist role uses tools: read, bash, grep, find (not just bash, read) — grep and find were added in the advisor rewrite to support codebase research tasks.
 
 ## Decisions
 - The `## Role Memory` body section (memory-emit instructions) has been removed from all five opted-in role files; the `memory: true` frontmatter flag remains and the org extension now controls memory behaviour dynamically.
