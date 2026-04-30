@@ -25,7 +25,7 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { parseFrontmatter, withFileMutationQueue } from "@mariozechner/pi-coding-agent";
 import { truncateToWidth } from "@mariozechner/pi-tui";
 import { Type } from "typebox";
-import { UsageStats, fmtTokens, formatUsage, MEMORY_DIR, VALID_MEMORY_SECTIONS, MAX_MEMORY_ITEMS_PER_SECTION, extractMemoryEntries } from "./utils.js";
+import { UsageStats, fmtTokens, formatUsage } from "./utils.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -180,68 +180,9 @@ export function listAvailableRoles(cwd: string): string[] {
 
 // ─── Memory helpers ──────────────────────────────────────────────────────────
 
-function getMemoryPath(cwd: string, roleName: string): string {
-	return path.join(cwd, ".pi", MEMORY_DIR, `${roleName}.md`);
-}
-
 function memberMemoryPath(cwd: string, memberName: string): string {
 	const id = memberName.toLowerCase().replace(/\s+/g, '-');
 	return path.join(cwd, '.pi', 'memory', `${id}.md`);
-}
-
-async function appendToRoleMemory(
-	cwd: string,
-	roleName: string,
-	entries: { section: string; entry: string }[]
-): Promise<void> {
-	if (entries.length === 0) return;
-	const memPath = getMemoryPath(cwd, roleName);
-	await fs.promises.mkdir(path.dirname(memPath), { recursive: true });
-	await withFileMutationQueue(memPath, async () => {
-		// Parse existing file
-		const sections: Record<string, string[]> = {};
-		let existingFrontmatter: Record<string, unknown> = { role: roleName, version: 1 };
-		if (fs.existsSync(memPath)) {
-			const raw = await fs.promises.readFile(memPath, "utf-8");
-			const { frontmatter: fm, body } = parseFrontmatter<Record<string, unknown>>(raw);
-			if (fm) existingFrontmatter = { ...existingFrontmatter, ...fm };
-			for (const section of VALID_MEMORY_SECTIONS) {
-				const regex = new RegExp(`## ${section}\\n((?:- [^\\n]+\\n?)*)`);
-				const match = body.match(regex);
-				if (match) {
-					sections[section] = match[1]
-						.split("\n")
-						.filter((l: string) => l.startsWith("- "))
-						.map((l: string) => l.slice(2).trim())
-						.filter(Boolean);
-				}
-			}
-		}
-		// Append new entries with FIFO pruning
-		for (const { section, entry } of entries) {
-			if (!VALID_MEMORY_SECTIONS.includes(section)) continue;
-			if (!sections[section]) sections[section] = [];
-			sections[section].push(entry);
-			if (sections[section].length > MAX_MEMORY_ITEMS_PER_SECTION) {
-				sections[section] = sections[section].slice(-MAX_MEMORY_ITEMS_PER_SECTION);
-			}
-		}
-		// Reconstruct file
-		const totalEntries = Object.values(sections).reduce((sum, arr) => sum + arr.length, 0);
-		const fm = {
-			...existingFrontmatter,
-			last_updated: new Date().toISOString(),
-			entry_count: totalEntries,
-		};
-		const fmLines = Object.entries(fm).map(([k, v]) => `${k}: ${v}`).join("\n");
-		let body = "";
-		for (const section of VALID_MEMORY_SECTIONS) {
-			if (sections[section]?.length) {
-				body += `\n## ${section}\n${sections[section].map((e: string) => `- ${e}`).join("\n")}\n`;
-			}
-		}
-		await fs.promises.writeFile(memPath, `---\n${fmLines}\n---\n${body}`, "utf-8");
-	});
 }
 
 // ─── Subagent spawning ────────────────────────────────────────────────────────
