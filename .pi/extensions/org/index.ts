@@ -488,7 +488,7 @@ interface MemberState {
 // ─── Extension ────────────────────────────────────────────────────────────────
 
 export default function (pi: ExtensionAPI) {
-	let asyncMode = false;
+	let asyncMode = true;
 	const memberState = new Map<string, MemberState>();
 	const memberUsage = new Map<string, UsageStats>();
 	const memberTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -590,7 +590,13 @@ export default function (pi: ExtensionAPI) {
 	}
 
 	function updateWidget(ctx: any): void {
-		if (!ctx?.hasUI) return;
+		let hasUI: boolean;
+		try {
+			hasUI = ctx?.hasUI;
+		} catch {
+			return;
+		}
+		if (!hasUI) return;
 		lastCtx = ctx;
 		ctx.ui.setWidget("org-team", (_tui: any, _theme: any) => ({
 			render(width: number): string[] {
@@ -604,7 +610,7 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_start", async (event, ctx) => {
 		if (event.reason !== "startup" && event.reason !== "resume" && event.reason !== "reload") return;
 		// Reset all state to idle on (re)start
-		asyncMode = false;
+		asyncMode = true;
 		memberState.clear();
 		memberUsage.clear();
 		memberTimers.clear();
@@ -967,7 +973,7 @@ export default function (pi: ExtensionAPI) {
 						if (result.exitCode === 0) {
 							scheduleDoneReset(r.member.name);
 						}
-						updateWidget(ctx);
+						updateWidget(lastCtx);
 						const content = result.exitCode === 0
 							? result.output
 							: `Error:\n${result.output || result.stderr || "(no output)"}`;
@@ -975,7 +981,7 @@ export default function (pi: ExtensionAPI) {
 					})
 					.catch(err => {
 						memberState.set(r.member.name, { status: "error", task: params.task });
-						updateWidget(ctx);
+						updateWidget(lastCtx);
 						deliverResult(r.member.name, r.config.name, `Task threw unexpectedly: ${err?.message ?? err}`);
 					});
 
@@ -1012,7 +1018,7 @@ export default function (pi: ExtensionAPI) {
 							if (result.exitCode === 0) {
 								scheduleDoneReset(r.member.name);
 							}
-							updateWidget(ctx);
+							updateWidget(lastCtx);
 							const content = result.exitCode === 0
 								? result.output
 								: `Error:\n${result.output || result.stderr || "(no output)"}`;
@@ -1020,7 +1026,7 @@ export default function (pi: ExtensionAPI) {
 						})
 						.catch(err => {
 							memberState.set(r.member.name, { status: "error", task: t.task });
-							updateWidget(ctx);
+							updateWidget(lastCtx);
 							deliverResult(r.member.name, r.config.name, `Task threw unexpectedly: ${err?.message ?? err}`);
 						});
 				}
@@ -1051,7 +1057,7 @@ export default function (pi: ExtensionAPI) {
 						const hiredNote = r.hired ? `Auto-hired ${r.member.name} (${r.config.name}) — ` : "";
 						const task = step.task.replace(/\{previous\}/g, previous);
 						memberState.set(r.member.name, { status: "working", task });
-						updateWidget(ctx);
+						updateWidget(lastCtx);
 						pi.sendUserMessage(`${hiredNote}[chain ${i + 1}/${chainLength}] ${r.member.name} starting…`, { deliverAs: "followUp" });
 
 						let result: RunResult;
@@ -1059,14 +1065,14 @@ export default function (pi: ExtensionAPI) {
 							result = await runTask(r.config, r.member.name, task, step.cwd ?? ctx.cwd, signal);
 						} catch (err: any) {
 							memberState.set(r.member.name, { status: "error", task });
-							updateWidget(ctx);
+							updateWidget(lastCtx);
 							deliverResult("Chain", "error", `Step ${i + 1} (${r.member.name}) threw: ${err?.message ?? err}`);
 							return;
 						}
 
 						if (result.exitCode !== 0) {
 							memberState.set(r.member.name, { status: "error", task });
-							updateWidget(ctx);
+							updateWidget(lastCtx);
 							deliverResult("Chain", "error",
 								`Chain stopped at step ${i + 1} (${r.member.name}):\n${result.output || result.stderr || "(no output)"}`
 							);
@@ -1076,7 +1082,7 @@ export default function (pi: ExtensionAPI) {
 						memberState.set(r.member.name, { status: "done", task });
 						accumulateUsage(r.member.name, result.usage);
 						scheduleDoneReset(r.member.name);
-						updateWidget(ctx);
+						updateWidget(lastCtx);
 						previous = result.output;
 						sections.push(`## Step ${i + 1}: ${r.member.name} (${r.config.name})\n\n${result.output}`);
 					}
