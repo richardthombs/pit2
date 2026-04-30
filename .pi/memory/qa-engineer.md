@@ -1,8 +1,8 @@
 ---
 role: qa-engineer
 version: 1
-last_updated: 2026-04-30T05:19:50.544Z
-entry_count: 8
+last_updated: 2026-04-30T11:51:27.671Z
+entry_count: 12
 ---
 
 ## Conventions
@@ -18,3 +18,7 @@ entry_count: 8
 - beads-specialist.md tools line was updated to include web_search and fetch_content (as of 2026-04-30), full line: `tools: read, bash, grep, find, web_search, fetch_content`
 - In org/index.ts, resolveOrScale is a closure inside delegate's execute() that captures ctx — its updateWidget(ctx) call in the auto-hire branch is a minor stale-ctx gap covered by the guard but not fixed in the 2026-04-30 async stale-ctx fix; worth noting for any future related work
 - The EM system prompt lives at /Users/richardthombs/dev/pit2/.pi/SYSTEM.md; Tool Use Boundary section explicitly prohibits using read/bash/grep to answer domain-expertise questions directly — those must be delegated to a specialist
+- In org/index.ts, memberMemoryPath() uses a simpler slug (no non-alphanum strip) compared to nameToId(); both fire handlers and runTask() call memberMemoryPath() consistently, so there's no functional bug, but "Blake O'Brien" would get a memory file with a literal apostrophe in its name
+- appendToRoleMemory() and its extractMemoryEntries import remain as dead code in org/index.ts after the per-member memory migration (as of 2026-04-30) — safe to delete in a future cleanup pass
+- Streaming widget addition in org/index.ts: MemberState.streaming field (optional string), runTaskWithStreaming() wrapper passes onStream callback to runTask(), buildWidgetLines() substitutes state.streaming when status==="working", scheduleWidgetRefresh() debounces at 150ms using lastCtx. Streaming is turn-level (fires on message_end), not token-level.
+- In runTask() args array, --system-prompt "" suppresses SYSTEM.md auto-discovery and --no-context-files suppresses AGENTS.md injection; both flags were added in the subagent context-leak fix (2026-04-30). --system-prompt takes the next positional arg (empty string), so array ordering matters.

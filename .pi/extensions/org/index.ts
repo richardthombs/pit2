@@ -47,6 +47,10 @@ interface RunResult {
 	usage: UsageStats;
 }
 
+type StreamEvent =
+	| { kind: "text"; text: string }
+	| { kind: "tool"; name: string; summary: string };
+
 // ─── Name Pool ────────────────────────────────────────────────────────────────
 
 const NAME_POOL = [
@@ -180,6 +184,11 @@ function getMemoryPath(cwd: string, roleName: string): string {
 	return path.join(cwd, ".pi", MEMORY_DIR, `${roleName}.md`);
 }
 
+function memberMemoryPath(cwd: string, memberName: string): string {
+	const id = memberName.toLowerCase().replace(/\s+/g, '-');
+	return path.join(cwd, '.pi', 'memory', `${id}.md`);
+}
+
 async function appendToRoleMemory(
 	cwd: string,
 	roleName: string,
@@ -278,8 +287,9 @@ async function runTask(
 	cwd: string,
 	signal?: AbortSignal,
 	onProgress?: (text: string) => void,
+	onStream?: (event: StreamEvent) => void,
 ): Promise<RunResult> {
-	const args: string[] = ["--mode", "json", "-p", "--no-session"];
+	const args: string[] = ["--mode", "json", "-p", "--no-session", "--system-prompt", "", "--no-context-files"];
 	if (config.model) args.push("--model", config.model);
 	if (config.tools?.length) args.push("--tools", config.tools.join(","));
 
@@ -294,22 +304,19 @@ async function runTask(
 
 	try {
 		let promptContent = config.systemPrompt;
-		if (config.memory) {
-			const memPath = getMemoryPath(cwd, config.name);
+		// Per-member memory injection (always on)
+		const memPath = memberMemoryPath(cwd, memberName);
+		try {
+			let memBlock = `\n\n---\n## Your Identity & Memory\n\nYour name is ${memberName}. Your memory file is at ${memPath}.\n\nAt the start of each task, read your memory file if it exists to recall relevant context. At the end of each task, update your memory file directly using your write/edit tools to record anything useful — decisions made, pitfalls encountered, codebase landmarks discovered. You own this file; maintain it however works best for you.`;
 			if (fs.existsSync(memPath)) {
-				try {
-					const raw = fs.readFileSync(memPath, "utf-8");
-					const { body } = parseFrontmatter(raw);
-					if (body.trim()) {
-						promptContent += `\n\n---\n## Role Memory\n\nThe following was accumulated from previous tasks in this role. Treat it as established context:\n\n${body.trim()}`;
-					}
-				} catch {
-					// Memory read failure is non-fatal — proceed without it
+				const raw = fs.readFileSync(memPath, 'utf-8');
+				if (raw.trim()) {
+					memBlock += `\n\n${raw.trim()}`;
 				}
 			}
-
-			// Always append write instructions for memory-enabled roles
-			promptContent += `\n\n---\n## Recording New Memories\n\nAt the end of your response, if you encountered something genuinely worth remembering for future tasks — a convention, a pitfall, a decision, an EM preference — emit one or more memory entries in this exact format:\n\n<!-- MEMORY\nsection: Conventions\nentry: One concise sentence describing what to remember\n-->\n\nValid sections: Conventions, Decisions, Pitfalls, EM Preferences, Codebase Landmarks, Miscellaneous\n\nOnly emit entries for novel, reusable insights. Do not repeat what is already in memory above. Do not emit entries for task-specific details that will not generalise.`;
+			promptContent += memBlock;
+		} catch {
+			// Memory read failure is non-fatal — proceed without it
 		}
 
 		if (promptContent.trim()) {
@@ -346,6 +353,7 @@ async function runTask(
 					if (ev.message.role === "assistant") {
 						const out = getFinalOutput(messages);
 						if (out) onProgress?.(out);
+						if (out) onStream?.({ kind: "text", text: out });
 						const u = (ev.message as any).usage;
 						if (u) {
 							usage.input      += u.input       ?? 0;
@@ -359,6 +367,12 @@ async function runTask(
 				}
 				if (ev.type === "tool_result_end" && ev.message) {
 					messages.push(ev.message as JsonMessage);
+				}
+				// Tool call streaming indicator
+				const toolName = ev.name ?? ev.tool_name ?? ev.tool;
+				if (toolName && typeof toolName === "string" &&
+					(ev.type === "tool_use" || ev.type === "tool_use_start" || ev.type === "tool_call")) {
+					onStream?.({ kind: "tool", name: toolName, summary: "" });
 				}
 			};
 
@@ -395,15 +409,7 @@ async function runTask(
 
 		if (wasAborted) throw new Error("Task aborted");
 		const rawOutput = getFinalOutput(messages);
-		let finalOutput = rawOutput;
-		if (config.memory && rawOutput) {
-			const { entries, cleanOutput } = extractMemoryEntries(rawOutput);
-			finalOutput = cleanOutput;
-			if (entries.length > 0) {
-				// Fire-and-forget — memory write failure must not affect task result
-				appendToRoleMemory(cwd, config.name, entries).catch(() => {});
-			}
-		}
+		const finalOutput = rawOutput;
 		return { exitCode, output: finalOutput, stderr, usage };
 	} finally {
 		if (tmpFile) {
@@ -421,6 +427,27 @@ async function runTask(
 			}
 		}
 	}
+}
+
+// ─── Stream snippet helpers ──────────────────────────────────────────────────
+
+const ANSI_STRIP_RE = /\x1b\[[0-9;]*[a-zA-Z]/g;
+
+function lastMeaningfulLine(text: string, maxLen: number): string {
+	const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
+	const last = lines[lines.length - 1] ?? "";
+	// If last "line" is a lone bracket/punctuation char, fall back to tail of full text
+	if (last.length <= 1) {
+		const full = text.replace(ANSI_STRIP_RE, "").trim();
+		return full.length > maxLen ? full.slice(-maxLen) : full;
+	}
+	return last.length > maxLen ? last.slice(-maxLen) : last;
+}
+
+function extractStreamSnippet(ev: StreamEvent): string {
+	if (ev.kind === "tool") return `⚙ ${ev.name}`;
+	if (ev.kind === "text") return lastMeaningfulLine(ev.text.replace(ANSI_STRIP_RE, ""), 80);
+	return "";
 }
 
 // ─── Tool parameter schemas ───────────────────────────────────────────────────
@@ -482,7 +509,8 @@ const DelegateParams = Type.Object({
 type MemberStatus = "idle" | "working" | "done" | "error";
 interface MemberState {
 	status: MemberStatus;
-	task?: string; // brief snippet of current/last task
+	task?: string;       // brief snippet of current/last task
+	streaming?: string;  // last live snippet from subprocess; only meaningful when status === "working"
 }
 
 // ─── Extension ────────────────────────────────────────────────────────────────
@@ -522,6 +550,39 @@ export default function (pi: ExtensionAPI) {
 		});
 	}
 
+	// ─── Streaming refresh & wrapper ─────────────────────────────────────────────
+
+	const STREAM_REFRESH_INTERVAL_MS = 150;
+	let widgetRefreshScheduled = false;
+
+	function scheduleWidgetRefresh(): void {
+		if (widgetRefreshScheduled) return;
+		widgetRefreshScheduled = true;
+		setTimeout(() => {
+			widgetRefreshScheduled = false;
+			if (lastCtx) updateWidget(lastCtx);
+		}, STREAM_REFRESH_INTERVAL_MS);
+	}
+
+	function runTaskWithStreaming(
+		config: AgentConfig,
+		memberName: string,
+		task: string,
+		cwd: string,
+		signal?: AbortSignal,
+		onProgress?: (text: string) => void,
+	): Promise<RunResult> {
+		return runTask(config, memberName, task, cwd, signal, onProgress, (ev) => {
+			const snippet = extractStreamSnippet(ev);
+			if (!snippet) return;
+			const state = memberState.get(memberName);
+			if (state?.status === "working") {
+				memberState.set(memberName, { ...state, streaming: snippet });
+				scheduleWidgetRefresh();
+			}
+		});
+	}
+
 	function buildWidgetLines(cwd: string, width: number = 120): string[] {
 		const roster = loadRoster(cwd);
 		const lines: string[] = [`  Engineering Manager  (async: ${asyncMode ? "on" : "off"})`];
@@ -553,7 +614,9 @@ export default function (pi: ExtensionAPI) {
 			// usageStr contains only ASCII and narrow unicode (↑, ↓, digits, k, M, $, spaces),
 			// so String.length equals visible character width — safe to use directly.
 			const availableForTask = width - fixed - usageStr.length - 2;
-			const rawTask = state.task ?? "";
+			const rawTask = (state.status === "working" && state.streaming)
+				? state.streaming
+				: (state.task ?? "");
 			const sanitizedTask = rawTask.replace(/[\r\n\t]+/g, " ").replace(/\s{2,}/g, " ").trim();
 			let taskNote = "";
 			if (sanitizedTask && state.status !== "idle" && availableForTask > 3) {
@@ -785,6 +848,12 @@ export default function (pi: ExtensionAPI) {
 			// Keep name in usedNames so it won't be re-assigned
 			await saveRoster(ctx.cwd, roster);
 			memberState.delete(member.name);
+			// Clean up member memory file if it exists
+			try {
+				await fs.promises.unlink(memberMemoryPath(ctx.cwd, member.name));
+			} catch {
+				// File may not exist — that's fine
+			}
 			ctx.ui.notify(`${member.name} has left the team.`, "info");
 			updateWidget(ctx);
 		},
@@ -853,6 +922,12 @@ export default function (pi: ExtensionAPI) {
 			// Name stays in usedNames — permanently retired
 			await saveRoster(ctx.cwd, roster);
 			memberState.delete(member.name);
+			// Clean up member memory file if it exists
+			try {
+				await fs.promises.unlink(memberMemoryPath(ctx.cwd, member.name));
+			} catch {
+				// File may not exist — that's fine
+			}
 			updateWidget(ctx);
 
 			return {
@@ -965,7 +1040,7 @@ export default function (pi: ExtensionAPI) {
 				memberState.set(r.member.name, { status: "working", task: params.task });
 				updateWidget(ctx);
 
-				runTask(r.config, r.member.name, params.task, params.cwd ?? ctx.cwd, signal)
+				runTaskWithStreaming(r.config, r.member.name, params.task, params.cwd ?? ctx.cwd, signal)
 					.then(result => {
 						const status = result.exitCode === 0 ? "done" : "error";
 						memberState.set(r.member.name, { status, task: params.task });
@@ -1010,7 +1085,7 @@ export default function (pi: ExtensionAPI) {
 					started++;
 					ackLines.push(`${hiredNote}${r.member.name} starting in background.`);
 
-					runTask(r.config, r.member.name, t.task, t.cwd ?? ctx.cwd, signal)
+					runTaskWithStreaming(r.config, r.member.name, t.task, t.cwd ?? ctx.cwd, signal)
 						.then(result => {
 							const status = result.exitCode === 0 ? "done" : "error";
 							memberState.set(r.member.name, { status, task: t.task });
@@ -1062,7 +1137,7 @@ export default function (pi: ExtensionAPI) {
 
 						let result: RunResult;
 						try {
-							result = await runTask(r.config, r.member.name, task, step.cwd ?? ctx.cwd, signal);
+							result = await runTaskWithStreaming(r.config, r.member.name, task, step.cwd ?? ctx.cwd, signal);
 						} catch (err: any) {
 							memberState.set(r.member.name, { status: "error", task });
 							updateWidget(lastCtx);
@@ -1134,7 +1209,7 @@ export default function (pi: ExtensionAPI) {
 						details: {},
 					});
 
-					const result = await runTask(
+					const result = await runTaskWithStreaming(
 						r.config,
 						r.member.name,
 						task,
@@ -1215,7 +1290,7 @@ export default function (pi: ExtensionAPI) {
 							],
 							details: {},
 						});
-						const result = await runTask(
+						const result = await runTaskWithStreaming(
 							r.config,
 							r.member.name,
 							t.task,
@@ -1264,7 +1339,7 @@ export default function (pi: ExtensionAPI) {
 					details: {},
 				});
 
-				const result = await runTask(
+				const result = await runTaskWithStreaming(
 					r.config,
 					r.member.name,
 					params.task,

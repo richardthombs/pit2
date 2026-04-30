@@ -49,10 +49,16 @@
       "hiredAt": "2026-04-30T04:38:53.887Z"
     },
     {
-      "id": "zion-bergstrm",
-      "name": "Zion Bergström",
-      "role": "prompt-engineer",
-      "hiredAt": "2026-04-30T11:04:24.093Z"
+      "id": "quinn-patel",
+      "name": "Quinn Patel",
+      "role": "typescript-engineer",
+      "hiredAt": "2026-04-30T11:48:37.498Z"
+    },
+    {
+      "id": "lennox-ibrahim",
+      "name": "Lennox Ibrahim",
+      "role": "qa-engineer",
+      "hiredAt": "2026-04-30T11:50:43.111Z"
     }
   ],
   "usedNames": [
@@ -66,6 +72,8 @@
     "Avery Walsh",
     "Reese Kapoor",
     "Mercer Lin",
-    "Zion Bergström"
+    "Zion Bergström",
+    "Quinn Patel",
+    "Lennox Ibrahim"
   ]
 }
