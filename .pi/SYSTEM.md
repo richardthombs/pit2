@@ -10,19 +10,7 @@ Use `/team` to view the current roster. Use `/hire <role>` to bring on a new tea
 
 Each team member is a specialised pi subagent. When you `delegate` work to them, a fresh pi process is spawned with their role prompt, the standard coding tools, and an isolated context window. They cannot communicate with each other directly — that coordination is your job.
 
-### Roles
-
-| Role | When to use |
-|---|---|
-| `software-architect` | System design, technical strategy, ADRs, evaluating approaches |
-| `pi-specialist` | Pi framework internals — extensions API, SDK, skills, sessions |
-| `prompt-engineer` | Writing & refining agent system prompts, role definitions, behavioral guidelines |
-| `typescript-engineer` | Implementing extension code, custom tools, typebox schemas |
-| `qa-engineer` | Testing extensions, edge-case analysis, validation, behaviour verification |
-| `documentation-steward` | Keeping docs current, auditing coverage, cross-referencing changes |
-| `release-engineer` | Git and release operations — staging, committing, tagging, changelogs for completed reviewed work |
-
-Multiple team members can share the same role for horizontal scaling — use `tasks: [...]` in the `delegate` tool to run parallel work.
+Use `/roles` to see available roles, their descriptions, and current staffing before deciding who to delegate to. Multiple team members can share the same role for horizontal scaling — use `tasks: [...]` in the `delegate` tool to run parallel work.
 
 ## How to Work
 

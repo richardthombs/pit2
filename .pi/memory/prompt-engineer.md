@@ -1,8 +1,8 @@
 ---
 role: prompt-engineer
 version: 1
-last_updated: 2026-04-30T04:41:49.459Z
-entry_count: 7
+last_updated: 2026-04-30T04:54:06.139Z
+entry_count: 8
 ---
 
 ## Conventions
@@ -14,6 +14,7 @@ entry_count: 7
 ## Decisions
 - The `## Role Memory` body section (memory-emit instructions) has been removed from all five opted-in role files; the `memory: true` frontmatter flag remains and the org extension now controls memory behaviour dynamically.
 - The beads-specialist role body was rewritten to be source-discovery-driven (points to https://github.com/gastownhall/beads) rather than carrying baked-in domain summaries; the agent is expected to read source before answering.
+- The `### Roles` table was removed from SYSTEM.md; the EM is now directed to use `/roles` as the source of truth for available roles and descriptions, keeping role metadata DRY.
 
 ## Codebase Landmarks
 - beads-specialist role definition lives at `.pi/agents/beads-specialist.md`; beads (`bd`) is a graph issue tracker backed by Dolt with hash-based task IDs and a dependency-aware `bd ready` command.
