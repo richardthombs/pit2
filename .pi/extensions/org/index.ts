@@ -17,12 +17,14 @@
  *   delegate — single / parallel / chain delegation modes
  */
 
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { parseFrontmatter, withFileMutationQueue } from "@mariozechner/pi-coding-agent";
+import { parseFrontmatter, withFileMutationQueue, RpcClient } from "@mariozechner/pi-coding-agent";
+import type { RpcClientOptions } from "@mariozechner/pi-coding-agent";
+import type { AssistantMessage, TextContent } from "@mariozechner/pi-ai";
 import { truncateToWidth } from "@mariozechner/pi-tui";
 import { Type } from "typebox";
 import { UsageStats, fmtTokens, formatUsage } from "./utils.js";
@@ -185,6 +187,170 @@ function memberMemoryPath(cwd: string, memberName: string): string {
 	return path.join(cwd, '.pi', 'memory', `${id}.md`);
 }
 
+// ─── Subagent persistent clients ────────────────────────────────────────────
+
+/** Timeout for a single task's `waitForIdle()` call (5 minutes). */
+const TASK_IDLE_TIMEOUT_MS = 300_000;
+
+/** Timeout for the one-time memory-injection acknowledgement (30 seconds). */
+const MEMORY_INIT_TIMEOUT_MS = 30_000;
+
+interface LiveMemberEntry {
+	client: RpcClient;
+	lastUsed: number;     // Date.now() timestamp; updated at the start of every runTask() call
+	initialized: boolean; // true after the one-time memory-injection prompt has been sent
+}
+
+// Key format: `${cwd}::${memberName}` — includes cwd so that two projects opened in the
+// same pi instance do not share clients.
+const liveMembers = new Map<string, LiveMemberEntry>();
+
+function liveMemberKey(cwd: string, memberName: string): string {
+	return `${cwd}::${memberName}`;
+}
+
+function memberSystemPromptPath(cwd: string, memberName: string): string {
+	return path.join(cwd, ".pi", "prompts", "members", `${nameToId(memberName)}.md`);
+}
+
+async function buildMemberSystemPromptFile(
+	config: AgentConfig,
+	memberName: string,
+	cwd: string,
+): Promise<string> {
+	const filePath = memberSystemPromptPath(cwd, memberName);
+	const memPath = memberMemoryPath(cwd, memberName);
+	let memInstructions: string;
+	try {
+		const memTemplatePath = path.join(cwd, ".pi", "prompts", "memory.md");
+		const template = fs.readFileSync(memTemplatePath, "utf-8");
+		memInstructions = `\n\n---\n${template
+			.replace(/\[name\]/g, memberName)
+			.replace(/\[path\]/g, memPath)}`;
+	} catch {
+		memInstructions =
+			`\n\n---\n## Your Identity & Memory\n\n` +
+			`Your name is ${memberName}. Your memory file is at ${memPath}.\n\n` +
+			`At the start of each task, read your memory file if it exists to recall relevant context. ` +
+			`At the end of each task, update your memory file directly using your write/edit tools to ` +
+			`record anything useful — decisions made, pitfalls encountered, codebase landmarks discovered. ` +
+			`You own this file; maintain it however works best for you.`;
+	}
+
+	const content = config.systemPrompt + memInstructions;
+	await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
+	await withFileMutationQueue(filePath, () =>
+		fs.promises.writeFile(filePath, content, { encoding: "utf-8", mode: 0o600 }),
+	);
+	return filePath;
+}
+
+async function initializeClientMemory(
+	client: RpcClient,
+	memberName: string,
+	cwd: string,
+): Promise<void> {
+	const memPath = memberMemoryPath(cwd, memberName);
+	let memContent: string | null = null;
+	try {
+		const raw = fs.readFileSync(memPath, "utf-8");
+		if (raw.trim()) memContent = raw.trim();
+	} catch {
+		// No memory file yet — that's fine
+	}
+
+	if (!memContent) return;
+
+	await client.prompt(
+		`Before your first task, here are your current memory file contents:\n\n${memContent}\n\n` +
+		`Please acknowledge this context briefly.`
+	);
+	await client.waitForIdle(MEMORY_INIT_TIMEOUT_MS);
+}
+
+async function getOrCreateClient(
+	config: AgentConfig,
+	memberName: string,
+	cwd: string,
+): Promise<RpcClient> {
+	// Persistent RPC clients require node as the executor — not supported with bun-compiled pi
+	if (process.argv[1]?.startsWith("/$bunfs/root/")) {
+		throw new Error(
+			"Persistent RPC clients are not supported in bun-compiled pi binaries. " +
+			"Use the Node.js pi script or contact the team to patch RpcClient.",
+		);
+	}
+
+	const key = liveMemberKey(cwd, memberName);
+	const existing = liveMembers.get(key);
+	if (existing) {
+		existing.lastUsed = Date.now();
+		return existing.client;
+	}
+
+	// Build stable per-member system prompt file (written fresh each time a new client starts)
+	const systemPromptFile = await buildMemberSystemPromptFile(config, memberName, cwd);
+
+	const rpcArgs: string[] = [
+		"--no-session",
+		"--no-context-files",
+		"--system-prompt", "",
+		"--append-system-prompt", systemPromptFile,
+	];
+	if (config.tools?.length) {
+		rpcArgs.push("--tools", config.tools.join(","));
+	}
+
+	const client = new RpcClient({
+		cliPath: process.argv[1],
+		cwd,
+		model: config.model,
+		args: rpcArgs,
+	});
+
+	await client.start();
+	await client.setAutoCompaction(true);
+
+	const entry: LiveMemberEntry = {
+		client,
+		lastUsed: Date.now(),
+		initialized: false,
+	};
+	liveMembers.set(key, entry);
+
+	// Attach crash recovery listener via private process field.
+	// If the process exits between tasks, remove from liveMembers so the next
+	// runTask() call creates a fresh client rather than using a dead one.
+	const proc = (client as any).process as ChildProcess | null;
+	proc?.once("exit", () => {
+		if (liveMembers.get(key)?.client === client) {
+			liveMembers.delete(key);
+		}
+	});
+
+	return client;
+}
+
+function reapIdleClients(): void {
+	const now = Date.now();
+	const IDLE_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+	for (const [key, entry] of liveMembers) {
+		if (now - entry.lastUsed > IDLE_TIMEOUT_MS) {
+			liveMembers.delete(key);
+			entry.client.stop().catch(() => {});
+		}
+	}
+}
+
+async function stopLiveClient(cwd: string, memberName: string): Promise<void> {
+	const key = liveMemberKey(cwd, memberName);
+	const entry = liveMembers.get(key);
+	if (entry) {
+		liveMembers.delete(key);
+		await entry.client.stop().catch(() => {});
+	}
+}
+
 // ─── Subagent spawning ────────────────────────────────────────────────────────
 
 async function writeTempPrompt(name: string, content: string): Promise<{ dir: string; file: string }> {
@@ -230,150 +396,114 @@ async function runTask(
 	onProgress?: (text: string) => void,
 	onStream?: (event: StreamEvent) => void,
 ): Promise<RunResult> {
-	const args: string[] = ["--mode", "json", "-p", "--no-session", "--system-prompt", "", "--no-context-files"];
-	if (config.model) args.push("--model", config.model);
-	if (config.tools?.length) args.push("--tools", config.tools.join(","));
+	// ── 1. Abort early if already cancelled ────────────────────────────────────────────
+	if (signal?.aborted) throw new Error("Task aborted");
 
-	const usage: UsageStats = {
+	// ── 2. Get or create persistent client ─────────────────────────────────────────
+	const client = await getOrCreateClient(config, memberName, cwd);
+	const key = liveMemberKey(cwd, memberName);
+	const entry = liveMembers.get(key)!;
+	entry.lastUsed = Date.now();
+
+	// ── 3. Memory initialization (first task on a fresh client only) ─────────────────
+	if (!entry.initialized) {
+		await initializeClientMemory(client, memberName, cwd);
+		entry.initialized = true;
+	}
+
+	// ── 4. Per-task usage accumulator ───────────────────────────────────────────────
+	const taskUsage: UsageStats = {
 		input: 0, output: 0, cacheRead: 0, cacheWrite: 0,
-		cost: 0, contextTokens: 0
+		cost: 0, contextTokens: 0,
 	};
-	let tmpDir: string | null = null;
-	let tmpFile: string | null = null;
-	const messages: JsonMessage[] = [];
-	let stderr = "";
+
+	// ── 5. Register per-task event listener ─────────────────────────────────────────
+	const unsubscribe = client.onEvent((ev) => {
+		// Accumulate usage from each assistant turn
+		if (ev.type === "message_end" && ev.message.role === "assistant") {
+			const msg = ev.message as AssistantMessage;
+			const u = msg.usage;
+			if (u) {
+				taskUsage.input      += u.input;
+				taskUsage.output     += u.output;
+				taskUsage.cacheRead  += u.cacheRead;
+				taskUsage.cacheWrite += u.cacheWrite;
+				taskUsage.cost       += u.cost?.total ?? 0;
+				taskUsage.contextTokens = u.totalTokens; // overwrite — take latest
+			}
+		}
+
+		// Live text streaming (fires many times per turn as tokens arrive)
+		if (ev.type === "message_update" && ev.message.role === "assistant") {
+			const msg = ev.message as AssistantMessage;
+			const text = msg.content
+				.filter((c): c is TextContent => c.type === "text")
+				.map((c) => c.text)
+				.join("");
+			if (text) {
+				onProgress?.(text);
+				onStream?.({ kind: "text", text });
+			}
+		}
+
+		// Tool call indicator
+		if (ev.type === "tool_execution_start") {
+			onStream?.({ kind: "tool", name: ev.toolName, summary: "" });
+		}
+	});
+
+	// ── 6. Cancellation wiring ────────────────────────────────────────────────────
+	let aborted = false;
+	let abortHandler: (() => void) | null = null;
+	if (signal) {
+		abortHandler = () => {
+			aborted = true;
+			client.abort().catch(() => {});
+		};
+		if (signal.aborted) {
+			abortHandler();
+		} else {
+			signal.addEventListener("abort", abortHandler, { once: true });
+		}
+	}
 
 	try {
-		let promptContent = config.systemPrompt;
-		// Per-member memory injection (always on)
-		const memPath = memberMemoryPath(cwd, memberName);
-		try {
-			const _memFallback = `\n\n---\n## Your Identity & Memory\n\nYour name is ${memberName}. Your memory file is at ${memPath}.\n\nAt the start of each task, read your memory file if it exists to recall relevant context. At the end of each task, update your memory file directly using your write/edit tools to record anything useful — decisions made, pitfalls encountered, codebase landmarks discovered. You own this file; maintain it however works best for you.`;
-			let memBlock = _memFallback;
-			try {
-				const memTemplatePath = path.join(cwd, '.pi', 'prompts', 'memory.md');
-				const template = fs.readFileSync(memTemplatePath, 'utf-8');
-				memBlock = `\n\n---\n${template.replace(/\[name\]/g, memberName).replace(/\[path\]/g, memPath)}`;
-			} catch {
-				// Template load failure is non-fatal — use hardcoded fallback
-			}
-			if (fs.existsSync(memPath)) {
-				const raw = fs.readFileSync(memPath, 'utf-8');
-				if (raw.trim()) {
-					memBlock += `\n\n${raw.trim()}`;
-				}
-			}
-			promptContent += memBlock;
-		} catch {
-			// Memory read failure is non-fatal — proceed without it
-		}
+		// ── 7. Send the task prompt ───────────────────────────────────────────────
+		await client.prompt(`Task for ${memberName}: ${task}`);
 
-		if (promptContent.trim()) {
-			const tmp = await writeTempPrompt(config.name, promptContent);
-			tmpDir = tmp.dir;
-			tmpFile = tmp.file;
-			args.push("--append-system-prompt", tmpFile);
-		}
+		// ── 8. Wait for completion ─────────────────────────────────────────────────
+		await client.waitForIdle(TASK_IDLE_TIMEOUT_MS);
 
-		args.push(`Task for ${memberName}: ${task}`);
+		if (aborted) throw new Error("Task aborted");
 
-		let wasAborted = false;
-
-		const exitCode = await new Promise<number>((resolve) => {
-			const inv = getPiInvocation(args);
-			const proc = spawn(inv.command, inv.args, {
-				cwd,
-				shell: false,
-				stdio: ["ignore", "pipe", "pipe"],
-			});
-
-			let buf = "";
-
-			const processLine = (line: string) => {
-				if (!line.trim()) return;
-				let ev: any;
-				try {
-					ev = JSON.parse(line);
-				} catch {
-					return;
-				}
-				if (ev.type === "message_end" && ev.message) {
-					messages.push(ev.message as JsonMessage);
-					if (ev.message.role === "assistant") {
-						const out = getFinalOutput(messages);
-						if (out) onProgress?.(out);
-						if (out) onStream?.({ kind: "text", text: out });
-						const u = (ev.message as any).usage;
-						if (u) {
-							usage.input      += u.input       ?? 0;
-							usage.output     += u.output      ?? 0;
-							usage.cacheRead  += u.cacheRead   ?? 0;
-							usage.cacheWrite += u.cacheWrite  ?? 0;
-							usage.cost       += u.cost?.total ?? 0;
-							usage.contextTokens = u.totalTokens ?? 0;
-						}
-					}
-				}
-				if (ev.type === "tool_result_end" && ev.message) {
-					messages.push(ev.message as JsonMessage);
-				}
-				// Tool call streaming indicator
-				const toolName = ev.name ?? ev.tool_name ?? ev.tool;
-				if (toolName && typeof toolName === "string" &&
-					(ev.type === "tool_use" || ev.type === "tool_use_start" || ev.type === "tool_call")) {
-					onStream?.({ kind: "tool", name: toolName, summary: "" });
-				}
+		// ── 9. Collect output ──────────────────────────────────────────────────────
+		const output = (await client.getLastAssistantText()) ?? "";
+		if (!output) {
+			// Agent completed but produced no text (e.g. interrupted, only tool calls).
+			// Client is still alive — do not remove from liveMembers.
+			return {
+				exitCode: 1,
+				output: "(no output)",
+				stderr: client.getStderr(),
+				usage: taskUsage,
 			};
-
-			proc.stdout.on("data", (d: Buffer) => {
-				buf += d.toString();
-				const lines = buf.split("\n");
-				buf = lines.pop() ?? "";
-				for (const line of lines) processLine(line);
-			});
-
-			proc.stderr.on("data", (d: Buffer) => {
-				stderr += d.toString();
-			});
-
-			proc.on("close", (code) => {
-				if (buf.trim()) processLine(buf);
-				resolve(code ?? 0);
-			});
-
-			proc.on("error", () => resolve(1));
-
-			if (signal) {
-				const kill = () => {
-					wasAborted = true;
-					proc.kill("SIGTERM");
-					setTimeout(() => {
-						if (!proc.killed) proc.kill("SIGKILL");
-					}, 5000);
-				};
-				if (signal.aborted) kill();
-				else signal.addEventListener("abort", kill, { once: true });
-			}
-		});
-
-		if (wasAborted) throw new Error("Task aborted");
-		const rawOutput = getFinalOutput(messages);
-		const finalOutput = rawOutput;
-		return { exitCode, output: finalOutput, stderr, usage };
-	} finally {
-		if (tmpFile) {
-			try {
-				fs.unlinkSync(tmpFile);
-			} catch {
-				/* ignore */
-			}
 		}
-		if (tmpDir) {
-			try {
-				fs.rmdirSync(tmpDir);
-			} catch {
-				/* ignore */
-			}
+
+		return { exitCode: 0, output, stderr: "", usage: taskUsage };
+	} catch (err: any) {
+		if (aborted || signal?.aborted) throw new Error("Task aborted");
+
+		// Treat any non-abort error as a potential client crash — remove so next call recreates
+		if (liveMembers.get(key)?.client === client) {
+			liveMembers.delete(key);
+			client.stop().catch(() => {});
+		}
+
+		throw new Error("Member process crashed or disconnected — client removed");
+	} finally {
+		unsubscribe();
+		if (abortHandler && signal && !signal.aborted) {
+			signal.removeEventListener("abort", abortHandler);
 		}
 	}
 }
@@ -470,6 +600,7 @@ export default function (pi: ExtensionAPI) {
 	const memberUsage = new Map<string, UsageStats>();
 	const memberTimers = new Map<string, ReturnType<typeof setTimeout>>();
 	let lastCtx: any = null;
+	let reaperInterval: ReturnType<typeof setInterval> | null = null;
 
 	const scalingLocks = new Map<string, Promise<void>>();
 
@@ -643,6 +774,12 @@ export default function (pi: ExtensionAPI) {
 				// Watcher unavailable in this environment — silently skip
 			}
 		}
+
+		// Start idle reaper (replaces any reaper from a prior session)
+		if (reaperInterval) clearInterval(reaperInterval);
+		reaperInterval = setInterval(() => {
+			reapIdleClients();
+		}, 60_000);
 	});
 
 	pi.on("session_shutdown", async () => {
@@ -650,6 +787,18 @@ export default function (pi: ExtensionAPI) {
 		rosterWatcher = null;
 		for (const timer of memberTimers.values()) clearTimeout(timer);
 		memberTimers.clear();
+
+		// Stop the idle reaper
+		if (reaperInterval) {
+			clearInterval(reaperInterval);
+			reaperInterval = null;
+		}
+
+		// Stop all live member clients
+		for (const [, entry] of liveMembers) {
+			entry.client.stop().catch(() => {});
+		}
+		liveMembers.clear();
 	});
 
 	// ── /team ──────────────────────────────────────────────────────────────────
@@ -793,6 +942,7 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
+			await stopLiveClient(ctx.cwd, member.name);
 			roster.members.splice(idx, 1);
 			// Keep name in usedNames so it won't be re-assigned
 			await saveRoster(ctx.cwd, roster);
@@ -800,6 +950,12 @@ export default function (pi: ExtensionAPI) {
 			// Clean up member memory file if it exists
 			try {
 				await fs.promises.unlink(memberMemoryPath(ctx.cwd, member.name));
+			} catch {
+				// File may not exist — that's fine
+			}
+			// Clean up member system prompt file if it exists
+			try {
+				await fs.promises.unlink(memberSystemPromptPath(ctx.cwd, member.name));
 			} catch {
 				// File may not exist — that's fine
 			}
@@ -867,6 +1023,7 @@ export default function (pi: ExtensionAPI) {
 				throw new Error(`"${params.member}" not found. Current team: ${names}`);
 			}
 			const member = roster.members[idx];
+			await stopLiveClient(ctx.cwd, member.name);
 			roster.members.splice(idx, 1);
 			// Name stays in usedNames — permanently retired
 			await saveRoster(ctx.cwd, roster);
@@ -874,6 +1031,12 @@ export default function (pi: ExtensionAPI) {
 			// Clean up member memory file if it exists
 			try {
 				await fs.promises.unlink(memberMemoryPath(ctx.cwd, member.name));
+			} catch {
+				// File may not exist — that's fine
+			}
+			// Clean up member system prompt file if it exists
+			try {
+				await fs.promises.unlink(memberSystemPromptPath(ctx.cwd, member.name));
 			} catch {
 				// File may not exist — that's fine
 			}
