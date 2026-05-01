@@ -33,6 +33,18 @@
 - Known open: `beads.role` not set after init → stderr warning on every `bd` call (non-blocking, cosmetic)
 - Known open: `design` param silently dropped when `status === "closed"` in `bd_task_update`
 
+### Beads Integration B — Broker (branch: beads-integration)
+- `broker.ts` exports `Broker` class + module-level singleton (`export const broker = new Broker()`)
+- Deps injected via `broker.configure(runBd, resolveOrScale, runTask, memberState, notifyEM)` — called in `export default fn` in index.ts
+- `broker.start(cwd)` / `broker.stop()` — stop called in `session_shutdown`
+- `_enqueueWrite(cwd, fn)` serialises all bd writes per-cwd; stores `next.catch(() => {})` to keep chain alive
+- `buildUpstreamContext` is now a `private` method on `Broker` class (was previously module-level export)
+- `resolveOrScale` has 4 params: `(cwd, memberState, memberName|undefined, roleName|undefined)` — no `liveMembers` param (dead param was removed); loads roster internally
+- ~~notification spam after 3 task failures~~ — FIXED: `_requeueTask` uses `--status=deferred` on 3rd failure; deferred tasks don't appear in `bd ready` so no repeat `notifyEM` fires
+- ~~`failureCounts` not reset on `broker.start()`~~ — FIXED: `start()` calls `this.failureCounts.clear()`
+- `captureResult` closes AFTER artifact capture (spec pseudocode says close-then-capture, impl is safer)
+- `onTaskUpdated` has extra `taskId` param vs design spec — both call site and handler are consistent
+
 ### Known Open Items (non-blocking)
 - `fmtTokens` imported in `index.ts` but never used — dead import, should be cleaned up
 - `MEMORY_DIR`, `VALID_MEMORY_SECTIONS`, `MAX_MEMORY_ITEMS_PER_SECTION`, `extractMemoryEntries()` remain as dead exports in `utils.ts` — harmless

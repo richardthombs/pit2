@@ -29,6 +29,31 @@ Key decisions and gotchas:
 - **`stopLiveClient()`**: called by `/fire` command and `fire` tool before roster splice; also deletes the member's system-prompt file.
 - **`delegate` tool**: manager-layer only. Not available to team members; we are on the receiving end.
 
+## Step 3 — broker integration into index.ts
+- broker.ts: replaced constructor-with-params with no-arg constructor + `configure(runBd, resolveOrScale, runTask, memberState, notifyEM)` method using `!` definite-assignment fields; added `export const broker = new Broker()` singleton at end of file
+- index.ts import changed from `{ Broker }` to `{ broker }`
+- `const broker = new Broker(...)` replaced with `broker.configure(...)` (same deps, same position in extension function)
+- `bd_task_update` hook: removed `params.status === "open"` guard from index.ts; broker.onTaskUpdated now always called when `broker.active`; passes `params.status ?? ""` (broker internally filters on status === "open")
+- `bd_task_create` and `bd_broker_start` were already fully implemented; no changes needed there
+
+## Step 2 — broker.ts rewrite (on `beads-integration` branch)
+- Existing skeleton was mostly correct; three key fixes applied:
+  1. `pollTimer` → `pollingInterval` (task spec naming)
+  2. `captureResult` signature: `(cwd, taskId, output, commitBefore)` — `commitAfter` computed inside via `getHeadCommit`
+  3. file-change path uses `--set-metadata git_commit=<sha>`; large-output uses `--set-metadata result_file=<path>` (design doc §17.3 pattern)
+- `liveKeys` and `writeQueue` are NOT private (task spec says they're visible properties)
+- `buildUpstreamContext` exported as a named export (module-level function)
+- `extractBlockerContext` is module-level but not exported (called only by `buildUpstreamContext`)
+- Broker constructor signature: `(runBd, resolveOrScale, runTask, memberState, notifyEM)` — matches index.ts instantiation
+- `_dispatchCycle` is called inside the write queue to serialise claims; `_runAndClose` fires outside it (agents run in parallel)
+
+## Step 1 of broker refactor (on `beads-integration` branch)
+- `resolveOrScale` extracted to module scope (was also defined as closure inside `delegate`'s execute)
+- New module-scope signature: `(cwd, memberState, liveMembers, memberName, roleName)` — all positional, no optionals
+- Broker lambda updated to: `(cwd, ms, role) => resolveOrScale(cwd, ms, liveMembers, undefined, role)`
+- `liveMembers` is module-scope but passed as param so broker (and future callers) can use it without closure access
+- The closure version had `updateWidget(ctx)` inside auto-hire path; dropped in extraction (callers always call updateWidget after anyway)
+
 ## Beads Integration A (implemented on `beads-integration` branch)
 Spec: `.pi/docs/spec-beads-integration-a.md` | Reference: `.pi/docs/beads-em-reference.md`
 

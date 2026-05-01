@@ -31,6 +31,7 @@ import type { AssistantMessage, TextContent } from "@mariozechner/pi-ai";
 import { truncateToWidth } from "@mariozechner/pi-tui";
 import { Type } from "typebox";
 import { UsageStats, fmtTokens, formatUsage } from "./utils.js";
+import { broker } from "./broker.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -576,6 +577,105 @@ async function ensureBeadsInit(
 	}
 }
 
+// ─── Scaling lock (module-scope so resolveOrScale can access it) ───────────
+
+const scalingLocks = new Map<string, Promise<void>>();
+
+function withScalingLock<T>(cwd: string, fn: () => Promise<T>): Promise<T> {
+	const prior = scalingLocks.get(cwd) ?? Promise.resolve();
+	let release!: () => void;
+	const gate = new Promise<void>(res => { release = res; });
+	scalingLocks.set(cwd, prior.then(() => gate));
+	return prior.then(async () => {
+		try { return await fn(); }
+		finally { release(); }
+	});
+}
+
+// ─── resolveOrScale (module-scope so the broker can call it) ─────────────────
+
+/**
+ * Resolve an available member for the given role (or by name), auto-hiring
+ * when all matching members are busy.
+ *
+ * Sets memberState to "working" for the resolved member.
+ * Does NOT update the UI widget — callers are responsible for widget updates.
+ */
+async function resolveOrScale(
+	cwd: string,
+	memberState: Map<string, MemberState>,
+	memberName: string | undefined,
+	roleName: string | undefined,
+): Promise<{ member: TeamMember; config: AgentConfig; hired: boolean } | { error: string }> {
+	if (!memberName && !roleName) return { error: "Specify either member name or role." };
+
+	// Named-member path
+	if (memberName) {
+		const roster = loadRoster(cwd);
+		const m = roster.members.find(x => x.name.toLowerCase() === memberName.toLowerCase());
+		if (!m) {
+			const names = roster.members.map(x => x.name).join(", ") || "none";
+			return { error: `Team member "${memberName}" not found. Current team: ${names}` };
+		}
+		const state = memberState.get(m.name) ?? { status: "idle" };
+		if (state.status !== "working") {
+			const config = loadAgentConfig(cwd, m.role);
+			if (!config) return { error: `Role definition ".pi/agents/${m.role}.md" not found for ${m.name}.` };
+			memberState.set(m.name, { status: "working" });
+			return { member: m, config, hired: false };
+		}
+		// Member is busy — fall through to role-based path with their role
+		roleName = m.role;
+	}
+
+	// Role-based path (with scaling lock to prevent parallel hire races)
+	return withScalingLock(cwd, async () => {
+		const roster = loadRoster(cwd);
+		const roleMembers = roster.members.filter(x => x.role === roleName);
+
+		// Find an idle member
+		const idle = roleMembers.find(x =>
+			(memberState.get(x.name) ?? { status: "idle" }).status !== "working"
+		);
+		if (idle) {
+			const config = loadAgentConfig(cwd, idle.role);
+			if (!config) return { error: `Role definition ".pi/agents/${idle.role}.md" not found for ${idle.name}.` };
+			memberState.set(idle.name, { status: "working" });
+			return { member: idle, config, hired: false };
+		}
+
+		// All busy — auto-hire
+		const config = loadAgentConfig(cwd, roleName!);
+		if (!config) return { error: `Role definition ".pi/agents/${roleName}.md" not found — cannot auto-hire for "${roleName}".` };
+
+		const name = pickUnusedName(roster.usedNames);
+		if (!name) {
+			return { error: `Name pool exhausted — cannot auto-hire for role "${roleName}". The team has reached the 30-member lifetime limit. Use /fire to remove members (note: names are permanently retired).` };
+		}
+
+		const newMember: TeamMember = {
+			id: nameToId(name),
+			name,
+			role: roleName!,
+			hiredAt: new Date().toISOString(),
+		};
+		roster.members.push(newMember);
+		roster.usedNames.push(name);
+
+		// Write directly rather than via saveRoster: we are inside withScalingLock,
+		// and while withFileMutationQueue (used by saveRoster) is orthogonal and would
+		// not deadlock, writing here keeps the roster mutation atomic within the lock.
+		await fs.promises.writeFile(
+			getRosterPath(cwd),
+			JSON.stringify(roster, null, 2),
+			"utf-8"
+		);
+
+		memberState.set(newMember.name, { status: "working" });
+		return { member: newMember, config, hired: true };
+	});
+}
+
 // ─── Stream snippet helpers ──────────────────────────────────────────────────
 
 const ANSI_STRIP_RE = /\x1b\[[0-9;]*[a-zA-Z]/g;
@@ -670,18 +770,14 @@ export default function (pi: ExtensionAPI) {
 	let lastCtx: any = null;
 	let reaperInterval: ReturnType<typeof setInterval> | null = null;
 
-	const scalingLocks = new Map<string, Promise<void>>();
-
-	function withScalingLock<T>(cwd: string, fn: () => Promise<T>): Promise<T> {
-		const prior = scalingLocks.get(cwd) ?? Promise.resolve();
-		let release!: () => void;
-		const gate = new Promise<void>(res => { release = res; });
-		scalingLocks.set(cwd, prior.then(() => gate));
-		return prior.then(async () => {
-			try { return await fn(); }
-			finally { release(); }
-		});
-	}
+	// Configure the module-level broker singleton with closure-scoped deps.
+	broker.configure(
+		runBd,
+		(cwd, ms, role) => resolveOrScale(cwd, ms, undefined, role),
+		runTaskWithStreaming,
+		memberState,
+		(msg) => pi.sendUserMessage(msg, { deliverAs: "followUp" }),
+	);
 
 	function accumulateUsage(memberName: string, delta: UsageStats): void {
 		const existing = memberUsage.get(memberName) ?? {
@@ -863,6 +959,9 @@ export default function (pi: ExtensionAPI) {
 			clearInterval(reaperInterval);
 			reaperInterval = null;
 		}
+
+		// Stop the broker to prevent orphaned timers
+		broker.stop();
 
 		// Stop all live member clients
 		await Promise.all([...liveMembers.values()].map(e => e.client.stop().catch(() => {})));
@@ -1170,7 +1269,9 @@ export default function (pi: ExtensionAPI) {
 		name: "bd_task_create",
 		label: "Task Create",
 		description:
-			"Create a beads task to represent a unit of delegated work. Attach it to an epic with epic_id if this task is part of a tracked workstream. Returns the task ID.",
+			"Create a beads task to represent a unit of delegated work. Attach it to an epic with epic_id if this task is part of a tracked workstream. " +
+			"Pass role to tag the task for broker dispatch — the broker will automatically delegate it to an available member with that role when it becomes ready. " +
+			"Returns the task ID.",
 		promptSnippet: "Create a tracked task bead",
 		parameters: Type.Object({
 			title: Type.String({
@@ -1182,6 +1283,12 @@ export default function (pi: ExtensionAPI) {
 			design: Type.Optional(Type.String({
 				description: "Rationale for this task — why it is needed, what decision it implements.",
 			})),
+			role: Type.Optional(Type.String({
+				description:
+					"Role slug to assign this task to (e.g. 'typescript-engineer', 'software-architect'). " +
+					"If provided and the broker is active, the broker will auto-dispatch to an available member with this role when the task becomes ready. " +
+					"Must match an agent slug in .pi/agents/. Use only one label per task.",
+			})),
 		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			const guard = beadsGuard(ctx.cwd);
@@ -1189,12 +1296,17 @@ export default function (pi: ExtensionAPI) {
 
 			const args = ["create", params.title, "--type=task", "--json"];
 			if (params.epic_id) args.push(`--parent=${params.epic_id}`);
-			if (params.design) args.push(`--design=${params.design}`);
+			if (params.design)  args.push(`--design=${params.design}`);
+			if (params.role)    args.push(`--label=${params.role}`);
 
 			try {
 				const { stdout } = await runBd(ctx.cwd, args);
 				const result = JSON.parse(stdout) as { id: string; title: string; [k: string]: unknown };
 				if (!result?.id) throw new Error(`bd create returned unexpected shape: ${stdout}`);
+
+				// Notify broker synchronously after successful write
+				if (broker.active) broker.onTaskCreated(ctx.cwd);
+
 				return {
 					content: [{ type: "text", text: `Task created. ID: ${result.id} — "${result.title}"` }],
 					details: { id: result.id, title: result.title },
@@ -1252,6 +1364,12 @@ export default function (pi: ExtensionAPI) {
 					const { stdout } = await runBd(ctx.cwd, args);
 					result = (JSON.parse(stdout) as Array<{ id: string; status: string; [k: string]: unknown }>)[0];
 				}
+
+				// Notify broker after a successful write
+				if (broker.active) {
+					broker.onTaskUpdated(ctx.cwd, params.id, params.status ?? "");
+				}
+
 				return {
 					content: [{ type: "text", text: `Updated ${result.id}: status=${result.status}` }],
 					details: result,
@@ -1365,13 +1483,19 @@ export default function (pi: ExtensionAPI) {
 		description:
 			"Return the set of tasks that have no unresolved blocking dependencies — i.e. tasks whose prerequisite work is done and that are safe to start. Use to identify what to delegate next in a multi-step workstream.",
 		promptSnippet: "Get the beads ready front",
-		parameters: Type.Object({}),
-		async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+		parameters: Type.Object({
+			role: Type.Optional(Type.String({
+				description: "Filter to tasks labelled for a specific role (e.g. 'typescript-engineer'). Omit to return all ready tasks.",
+			})),
+		}),
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			const guard = beadsGuard(ctx.cwd);
 			if (guard) return guard;
 
 			try {
-				const { stdout } = await runBd(ctx.cwd, ["ready", "--json"]);
+				const args = ["ready", "--type=task", "--json"];
+				if (params.role) args.push(`--label=${params.role}`);
+				const { stdout } = await runBd(ctx.cwd, args);
 				const items = JSON.parse(stdout) as unknown[];
 				return {
 					content: [{ type: "text", text: items.length === 0 ? "No tasks in ready state." : JSON.stringify(items, null, 2) }],
@@ -1380,6 +1504,49 @@ export default function (pi: ExtensionAPI) {
 			} catch (err: any) {
 				throw new Error(`bd_ready failed: ${err?.stderr ?? err?.message ?? err}`);
 			}
+		},
+	});
+
+	pi.registerTool({
+		name: "bd_broker_start",
+		label: "Broker Start",
+		description:
+			"Activate the beads broker. While active, the broker monitors the beads ready queue and " +
+			"automatically dispatches ready tasks to available team members by their role label. " +
+			"Use when you have pre-populated a beads queue and want autonomous dispatch. " +
+			"Only tasks with a role label (set via bd_task_create role parameter) are dispatched; unlabelled tasks are ignored.",
+		promptSnippet: "Activate autonomous broker dispatch",
+		parameters: Type.Object({}),
+		async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+			const guard = beadsGuard(ctx.cwd);
+			if (guard) return guard;
+			if (broker.active) {
+				return {
+					content: [{ type: "text", text: "Broker is already active." }],
+					details: {},
+				};
+			}
+			broker.start(ctx.cwd);
+			return {
+				content: [{ type: "text", text: "Broker started. Ready tasks will be dispatched automatically." }],
+				details: {},
+			};
+		},
+	});
+
+	pi.registerTool({
+		name: "bd_broker_stop",
+		label: "Broker Stop",
+		description:
+			"Deactivate the beads broker. In-flight tasks will complete normally; no new tasks will be dispatched.",
+		promptSnippet: "Deactivate broker dispatch",
+		parameters: Type.Object({}),
+		async execute(_toolCallId, _params, _signal, _onUpdate, _ctx) {
+			broker.stop();
+			return {
+				content: [{ type: "text", text: "Broker stopped." }],
+				details: {},
+			};
 		},
 	});
 
@@ -1399,86 +1566,9 @@ export default function (pi: ExtensionAPI) {
 		parameters: DelegateParams,
 
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
-			// Resolve a member+config from member name or role name, auto-scaling when all are busy
-			async function resolveOrScale(
-				member?: string,
-				role?: string,
-			): Promise<{ member: TeamMember; config: AgentConfig; hired: boolean } | { error: string }> {
-				if (!member && !role) return { error: "Specify either member name or role." };
-
-				// Named-member path
-				if (member) {
-					const roster = loadRoster(ctx.cwd);
-					const m = roster.members.find(x => x.name.toLowerCase() === member.toLowerCase());
-					if (!m) {
-						const names = roster.members.map(x => x.name).join(", ") || "none";
-						return { error: `Team member "${member}" not found. Current team: ${names}` };
-					}
-					const state = memberState.get(m.name) ?? { status: "idle" };
-					if (state.status !== "working") {
-						const config = loadAgentConfig(ctx.cwd, m.role);
-						if (!config) return { error: `Role definition ".pi/agents/${m.role}.md" not found for ${m.name}.` };
-						memberState.set(m.name, { status: "working" });
-						return { member: m, config, hired: false };
-					}
-					// Member is busy — fall through to role-based path with their role
-					role = m.role;
-				}
-
-				// Role-based path (with scaling lock to prevent parallel hire races)
-				return withScalingLock(ctx.cwd, async () => {
-					const roster = loadRoster(ctx.cwd);
-					const roleMembers = roster.members.filter(x => x.role === role);
-
-					// Find an idle member
-					const idle = roleMembers.find(x =>
-						(memberState.get(x.name) ?? { status: "idle" }).status !== "working"
-					);
-					if (idle) {
-						const config = loadAgentConfig(ctx.cwd, idle.role);
-						if (!config) return { error: `Role definition ".pi/agents/${idle.role}.md" not found for ${idle.name}.` };
-						memberState.set(idle.name, { status: "working" });
-						return { member: idle, config, hired: false };
-					}
-
-					// All busy — auto-hire
-					const config = loadAgentConfig(ctx.cwd, role!);
-					if (!config) return { error: `Role definition ".pi/agents/${role}.md" not found — cannot auto-hire for "${role}".` };
-
-					const name = pickUnusedName(roster.usedNames);
-					if (!name) {
-						return { error: `Name pool exhausted — cannot auto-hire for role "${role}". The team has reached the 30-member lifetime limit. Use /fire to remove members (note: names are permanently retired).` };
-					}
-
-					const newMember: TeamMember = {
-						id: nameToId(name),
-						name,
-						role: role!,
-						hiredAt: new Date().toISOString(),
-					};
-					roster.members.push(newMember);
-					roster.usedNames.push(name);
-
-					// Write directly rather than via saveRoster: we are inside withScalingLock,
-					// and while withFileMutationQueue (used by saveRoster) is orthogonal and would
-					// not deadlock, writing here keeps the roster mutation atomic within the lock.
-					// The practical risk of a concurrent /hire or /fire racing this write is
-					// negligible — interactive commands do not overlap with in-flight delegation.
-					await fs.promises.writeFile(
-						getRosterPath(ctx.cwd),
-						JSON.stringify(roster, null, 2),
-						"utf-8"
-					);
-
-					memberState.set(newMember.name, { status: "working" });
-					updateWidget(ctx); // immediate update; watcher will also fire
-					return { member: newMember, config, hired: true };
-				});
-			}
-
 			// ── Async: single mode ──────────────────────────────────────────
 			if ((params.async ?? asyncMode) && params.task) {
-				const r = await resolveOrScale(params.member, params.role);
+				const r = await resolveOrScale(ctx.cwd, memberState, params.member, params.role);
 				if ("error" in r) {
 					return { content: [{ type: "text", text: r.error }], details: {}, isError: true };
 				}
@@ -1521,7 +1611,7 @@ export default function (pi: ExtensionAPI) {
 				let started = 0;
 				const ackLines: string[] = [];
 				for (const [i, t] of params.tasks.entries()) {
-					const r = await resolveOrScale(t.member, t.role);
+					const r = await resolveOrScale(ctx.cwd, memberState, t.member, t.role);
 					if ("error" in r) {
 						deliverResult(t.member ?? t.role ?? `task ${i + 1}`, "unknown", `Could not start: ${r.error}`);
 						continue;
@@ -1569,7 +1659,7 @@ export default function (pi: ExtensionAPI) {
 
 					for (let i = 0; i < chainLength; i++) {
 						const step = params.chain![i];
-						const r = await resolveOrScale(step.member, step.role);
+						const r = await resolveOrScale(ctx.cwd, memberState, step.member, step.role);
 						if ("error" in r) {
 							deliverResult("Chain", "error", `Step ${i + 1} failed to resolve: ${r.error}`);
 							return;
@@ -1632,7 +1722,7 @@ export default function (pi: ExtensionAPI) {
 
 				for (let i = 0; i < params.chain.length; i++) {
 					const step = params.chain[i];
-					const r = await resolveOrScale(step.member, step.role);
+					const r = await resolveOrScale(ctx.cwd, memberState, step.member, step.role);
 					if ("error" in r) {
 						return {
 							content: [{ type: "text", text: `Chain step ${i + 1} failed: ${r.error}` }],
@@ -1716,7 +1806,7 @@ export default function (pi: ExtensionAPI) {
 
 				const results = await Promise.all(
 					params.tasks.map(async (t, i) => {
-						const r = await resolveOrScale(t.member, t.role);
+						const r = await resolveOrScale(ctx.cwd, memberState, t.member, t.role);
 						if ("error" in r) {
 							return {
 								name: t.member ?? t.role ?? `task ${i + 1}`,
@@ -1772,7 +1862,7 @@ export default function (pi: ExtensionAPI) {
 
 			// ── Single mode ───────────────────────────────────────────────────
 			if (params.task) {
-				const r = await resolveOrScale(params.member, params.role);
+				const r = await resolveOrScale(ctx.cwd, memberState, params.member, params.role);
 				if ("error" in r) {
 					return { content: [{ type: "text", text: r.error }], details: {}, isError: true };
 				}
