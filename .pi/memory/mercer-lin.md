@@ -8,6 +8,28 @@
 - `bd prime` auto-generates a live context summary; canonical source of truth per ADR-0001
 - Version as of last research: 0.60.0
 
+## Label System (Verified Against Source)
+
+- **Native label system**: full CRUD — `bd label add/remove/list/list-all/propagate`
+- **At creation**: `bd create "Title" -l software-architect --json` or `--label`
+- **Via update**: `--add-label`, `--remove-label`, `--set-labels a,b,c` (set replaces all atomically)
+- **Query**: `bd list --label x --json` (AND), `--label-any x,y` (OR), both work on `bd ready` too
+- **`bd ready --json` INCLUDES labels**: `buildReadyIssueOutput` calls `GetLabelsForIssues` — no follow-up `bd show` needed
+- **`bd swarm status --json` does NOT include labels**: summary counts only
+- **Reserved namespace**: `provides:` prefix hard-fails on `bd label add`; use `bd ship` instead
+- **`bd label add --json`** → array: `[{"status":"added","issue_id":"...","label":"..."}]`
+- **`bd label list --json`** → array of strings: `["label1","label2"]`
+
+## `bd show --json` Full Shape (Verified Against types.go)
+
+- Returns **array** `[IssueDetails]` — parse with `[0]`
+- `IssueDetails` = embedded `Issue` + `labels`, `dependencies`, `dependents`, `comments`, `parent`, epic progress fields
+- `description` is `omitempty` — **absent entirely if empty**; broker must handle missing key gracefully
+- Same omitempty: `design`, `notes`, `acceptance_criteria`, `assignee`, `close_reason`, `external_ref`, `metadata`
+- `priority` has **no omitempty** — always present, even at 0 (P0)
+- `dependencies`/`dependents` entries include `dependency_type` field (e.g., `"blocks"`, `"parent-child"`)
+- `parent` field is computed from parent-child dep and added at JSON serialization time
+
 ## Key Beads Facts (Expensive to Rediscover)
 
 ### JSON Response Shapes (Verified Against Live `bd` v1.0.3)
@@ -58,6 +80,12 @@
 - **Async gates** (`bd gate`) block a workflow on external conditions: human approval, CI run, PR merge, timer, mail. Auto-close via `bd gate eval`.
 - **Git-free operation**: `BEADS_DIR=/path/.beads bd init --stealth` — no git required.
 - **JSON output**: every command supports `--json`; structured for programmatic consumption.
+- **`bd swarm status <epic-id> --json`** returns `{ready, active, blocked, completed, progress_percent, ready_count, ...}` — the richest single-call signal for a broker; re-derives state from live graph
+- **`bd show --watch`** polls at 2-second interval using `id:status:updatedAt_nanoseconds` snapshot comparison — CLI-only, single-issue, NOT a broker API
+- **File watching on `.beads/` is explicitly broken** — Dolt embedded mode writes don't produce filesystem events; `inotify`/`chokidar`/`fsnotify` will never fire
+- **No event system exists** — no webhook, stream, callback, or pub/sub in v0.60.0; `bd daemon` referenced in README but `daemon.go` absent from main branch (unmerged PR #433)
+- **`bd close --suggest-next`** flag shows newly unblocked issues after a close — useful for a broker that calls `bd close` itself to get near-zero latency on close events
+- **`bd prime`** is prose Markdown for LLM context injection, not structured data — brokers should call `bd ready --json` or `bd swarm status --json` instead
 
 ## pit2 Architecture (Relevant to Beads Integration)
 

@@ -32,6 +32,17 @@ Installed at `/Users/richardthombs/.nvm/versions/node/v24.13.1/lib/node_modules/
 - **Event type narrowing**: `AgentEvent.message_end.message` is typed as `AgentMessage`; check `.role === 'assistant'` and cast to `AssistantMessage` (from `@mariozechner/pi-ai`) to access `.usage`.
 - **Member system prompt path**: `.pi/prompts/members/<slug>.md` — stable file used as the system prompt for each member's `RpcClient`.
 
+## Integration B Broker — Design Decisions (2026-05-01)
+
+- **Broker lives in `broker.ts`** within the org extension (not a separate extension), instantiated by `index.ts`. Tight coupling to `resolveOrScale`, `runTask`, `memberState` makes a separate extension non-viable.
+- **Event-driven via TS hooks, not beads events**: Beads has no pub/sub API. Broker is called synchronously from `bd_task_create` and `bd_task_update` tools after successful bd writes. 30s safety-net poll as fallback.
+- **Role tagging**: `bd_task_create` gets optional `role` param → stored in bead's `description` field as `role:<slug>`. Broker calls `bd show` per ready task to extract role. **Need Mercer to verify `bd show --json` exposes `description` field** (R3, not confirmed in sample output).
+- **`resolveOrScale` must be extracted** from the `delegate` tool closure to module scope — prerequisite refactor. New sig: `resolveOrScale(cwd, memberState, role?)`. ~20-line change.
+- **Embedded mode viable** (no dolt server needed) because broker mediates all writes; agents have no direct `bd` access. Write serialisation queue needed for concurrent completions.
+- **Broker is opt-in**: activated via `bd_broker_start` tool. `delegate` tool unaffected.
+- **Stuck task recovery**: if `runTask` throws, broker resets task to `open` via `bd update --status=open` then notifies EM.
+- **ADR-005**: Proposed in design doc `design-broker-integration-b.md` (not yet written — this is the proposal stage).
+
 ## Beads (Integration A) — Key Decisions
 
 - **7 registered tools** (not bash) for bd access: `bd_workstream_start`, `bd_task_create`, `bd_task_update`, `bd_dep_add`, `bd_list`, `bd_show`, `bd_ready`.
