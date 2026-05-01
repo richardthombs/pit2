@@ -34,24 +34,32 @@ Use `/roles` to see available roles, their descriptions, and current staffing be
 
 You have access to a persistent workstream tracker — beads — through seven tools: `bd_workstream_start`, `bd_task_create`, `bd_task_update`, `bd_dep_add`, `bd_list`, `bd_show`, and `bd_ready`. Use these to externalise coordination state that would otherwise live only in your conversation context.
 
-### When to use beads
+### The rule
 
-**Create an epic** (`bd_workstream_start`) when you assign a workstream label to a multi-step effort. The epic title should match the label. Do this before the first delegation in that workstream.
+Any multi-step effort — meaning any workstream that involves more than one delegation, or any workstream that may continue beyond this session — **must** be tracked in beads. This is not a judgement call. If you are assigning a workstream label, you are creating an epic. The only question is whether the work qualifies for an exception (see below); if it does not, you create the beads records.
 
-**Create a task bead** (`bd_task_create`) for each tracked delegation within an epic. Attach it to the epic using `epic_id`. Create all task beads for a workstream at the same time you plan the delegations — not one by one as each step completes.
+### Required actions
 
-**Record dependencies** (`bd_dep_add`) to encode ordering: if step A must complete before step B, add `A blocks B`. This is the beads equivalent of a `chain` — and it makes the dependency explicit in a form that survives compaction. Wire dependencies immediately after creating the task beads.
+**Before the first delegation** (`bd_workstream_start`): call this as soon as you plan a multi-step workstream. The epic title must match the workstream label. Do not delegate anything until the epic exists. This is not optional and does not depend on whether the workstream "seems significant enough" — the moment you identify a chain of dependent delegations, you create the epic.
 
-**Update on completion** (`bd_task_update`): after each delegation returns, close the task (`status: "closed"`) and record concise findings in `notes`. Do not paste raw subagent output; synthesise it. Two to five sentences is enough.
+**When planning delegations** (`bd_task_create`): create a task bead for every delegation in the workstream. Attach each one to the epic via `epic_id`. Create all task beads at plan time — not one by one as each step completes. The full set of planned tasks must exist before the first delegation is dispatched.
 
-**Reconstruct state after compaction** (`bd_list`, `bd_show`, `bd_ready`): if you lose thread of a workstream, start with `bd_list` to find open epics and tasks, then `bd_show` on the relevant epic for full context. Use `bd_ready` to find which tasks have no unresolved blockers — i.e., what you should delegate next.
+**When chain ordering exists** (`bd_dep_add`): any time step A must complete before step B, call `bd_dep_add` to record `A blocks B`. Wire all dependencies immediately after creating the task beads. Do not leave implied ordering implicit — if you would `chain` it, you must also record the dependency in beads.
 
-### When not to use beads
+**When a delegation completes** (`bd_task_update`): close the task (`status: "closed"`) and record concise findings in `notes`. Do not paste raw subagent output; synthesise it. Two to five sentences is enough. This must be done before you consider the step finished.
 
-Do not create beads for:
-- Single-delegation tasks with no follow-on (one-shot research, one file fix)
-- Work that obviously completes in this session and will not be queried in a future one
-- Sub-steps internal to a subagent's own work (beads is for EM coordination state, not subagent implementation steps)
+### When NOT to use beads
+
+Beads are not required for:
+- A single one-off delegation with no follow-on work — one research question, one isolated file fix, nothing chained after it
+- Work that will definitely complete within this session and will never need to be queried again
+- Sub-steps internal to a subagent's own work (beads tracks EM coordination state, not subagent implementation steps)
+
+If you are uncertain whether work qualifies for an exception, it does not. Create the epic.
+
+### Reconstructing state after compaction
+
+If you lose thread of a workstream: call `bd_list` to find open epics and tasks, then `bd_show` on the relevant epic for full context. Use `bd_ready` to find which tasks have no unresolved blockers — i.e., what to delegate next.
 
 ### Design vs Notes
 

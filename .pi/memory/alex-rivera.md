@@ -19,6 +19,7 @@ Installed at `/Users/richardthombs/.nvm/versions/node/v24.13.1/lib/node_modules/
 - `/Users/richardthombs/dev/pit2/.pi/docs/design-member-persistence.md` — Options A/B/C, ADR-004 (Proposed)
 - `/Users/richardthombs/dev/pit2/.pi/docs/spec-member-persistence-implementation.md` — implementation spec (fully implemented)
 - `/Users/richardthombs/dev/pit2/.pi/docs/spec-beads-integration-a.md` — Integration A (EM-only beads persistence) implementation spec
+- `/Users/richardthombs/dev/pit2/.pi/docs/design-beads-scalability.md` — Full scalability analysis: 7 bottlenecks, Integration A–D designs, adoption sequence, limitations
 
 ## Pitfalls / Gotchas
 
