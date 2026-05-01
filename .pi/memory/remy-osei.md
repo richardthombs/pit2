@@ -10,7 +10,7 @@
   - `contextPct?: number | null` on `MemberState`
   - Post-task `getSessionStats()` call in `runTaskWithStreaming()`
   - Async reaper that polls `getSessionStats()` for working members
-  - `ctx:XX%` display in `buildWidgetLines()` (shown for any non-null number — threshold removed 2026-05-01)
+  - `XX%` display in `buildWidgetLines()` (shown for any non-null number — threshold removed 2026-05-01; `ctx:` label prefix removed 2026-05-01)
 - The file is ~1978 lines; the 50 KB read limit cuts off around line 1404.
 
 ### `setMemberStatus` helper (added 2026-05-01)

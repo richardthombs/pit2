@@ -53,6 +53,12 @@
       "name": "Remy Osei",
       "role": "typescript-engineer",
       "hiredAt": "2026-05-01T13:55:22.125Z"
+    },
+    {
+      "id": "blaine-mwangi",
+      "name": "Blaine Mwangi",
+      "role": "typescript-engineer",
+      "hiredAt": "2026-05-01T15:37:06.978Z"
     }
   ],
   "usedNames": [
@@ -70,6 +76,7 @@
     "Quinn Patel",
     "Lennox Ibrahim",
     "Finley Park",
-    "Remy Osei"
+    "Remy Osei",
+    "Blaine Mwangi"
   ]
 }

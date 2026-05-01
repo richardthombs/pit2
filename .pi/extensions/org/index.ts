@@ -191,11 +191,6 @@ function memberMemoryPath(cwd: string, memberName: string): string {
 	return path.join(cwd, '.pi', 'memory', `${id}.md`);
 }
 
-function setMemberStatus(name: string, patch: Partial<MemberState>): void {
-	const prev = memberState.get(name) ?? { status: "idle" as MemberStatus };
-	memberState.set(name, { ...prev, ...patch });
-}
-
 // ─── Subagent persistent clients ────────────────────────────────────────────
 
 /** Timeout for a single task's `waitForIdle()` call (10 minutes). */
@@ -875,7 +870,7 @@ export default function (pi: ExtensionAPI) {
 			const usage = memberUsage.get(m.name);
 			// ctx:XX% suffix: shown whenever contextPct is a non-null number.
 			const ctxStr = typeof state.contextPct === "number"
-				? ` ctx:${Math.round(state.contextPct)}%`
+				? ` ${Math.round(state.contextPct)}%`
 				: "";
 			const ctxReserve = typeof state.contextPct === "number" ? 8 : 0;
 			const usageStr = (usage && (usage.input > 0 || usage.output > 0)
@@ -903,6 +898,11 @@ export default function (pi: ExtensionAPI) {
 	}
 
 	let rosterWatcher: fs.FSWatcher | null = null;
+
+	function setMemberStatus(name: string, patch: Partial<MemberState>): void {
+		const prev = memberState.get(name) ?? { status: "idle" as MemberStatus };
+		memberState.set(name, { ...prev, ...patch });
+	}
 
 	function scheduleDoneReset(memberName: string): void {
 		const existing = memberTimers.get(memberName);
