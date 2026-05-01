@@ -5,7 +5,7 @@
  * (the top-level pi session) can dispatch work to specialised team members.
  *
  * Each team member maps to a role definition in `.pi/agents/<role>.md`.
- * Delegation spawns an isolated `pi` subprocess using the role's system prompt.
+ * Each team member runs as a persistent RpcClient subprocess, reused across tasks.
  *
  * Commands:
  *   /team    — show current roster
@@ -17,7 +17,7 @@
  *   delegate — single / parallel / chain delegation modes
  */
 
-import { spawn, type ChildProcess } from "node:child_process";
+import { type ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -189,8 +189,8 @@ function memberMemoryPath(cwd: string, memberName: string): string {
 
 // ─── Subagent persistent clients ────────────────────────────────────────────
 
-/** Timeout for a single task's `waitForIdle()` call (5 minutes). */
-const TASK_IDLE_TIMEOUT_MS = 300_000;
+/** Timeout for a single task's `waitForIdle()` call (10 minutes). */
+const TASK_IDLE_TIMEOUT_MS = 600_000;
 
 /** Timeout for the one-time memory-injection acknowledgement (30 seconds). */
 const MEMORY_INIT_TIMEOUT_MS = 30_000;
@@ -407,8 +407,14 @@ async function runTask(
 
 	// ── 3. Memory initialization (first task on a fresh client only) ─────────────────
 	if (!entry.initialized) {
-		await initializeClientMemory(client, memberName, cwd);
-		entry.initialized = true;
+		try {
+			await initializeClientMemory(client, memberName, cwd);
+			entry.initialized = true;
+		} catch (initErr: any) {
+			// Memory injection failed — remove the broken client so the next call starts fresh
+			await stopLiveClient(cwd, memberName);
+			throw initErr;
+		}
 	}
 
 	// ── 4. Per-task usage accumulator ───────────────────────────────────────────────
@@ -499,7 +505,9 @@ async function runTask(
 			client.stop().catch(() => {});
 		}
 
-		throw new Error("Member process crashed or disconnected — client removed");
+		const wrapper = new Error(`Member process crashed or disconnected — client removed: ${err?.message ?? err}`);
+		(wrapper as any).cause = err;
+		throw wrapper;
 	} finally {
 		unsubscribe();
 		if (abortHandler && signal && !signal.aborted) {
