@@ -7,59 +7,49 @@ Senior software architect on the pit2 project (AI-powered software engineering o
 
 ### Org Extension
 - Main file: `/Users/richardthombs/dev/pit2/.pi/extensions/org/index.ts`
-- **Implementation is complete** — liveMembers, getOrCreateClient, initializeClientMemory, idle reaper, crash recovery all implemented
-- `runTask()` uses persistent RpcClient (not spawn-per-task)
-- `runTaskWithStreaming()` wraps `runTask()` with UI streaming
-- `delegate` tool supports single / parallel (max 8) / chain modes, plus async variants of all three
-- Member memory files: `.pi/memory/<member-slug>.md`
-- Parallel mode: `params.tasks` array, up to 8 concurrent
-- `asyncMode` default true; toggled with `/async` command; overridden per-call with `async:` param
-- Auto-compaction enabled on each client at start
-- `--no-session` flag: NO conversation persisted to disk
 
-### Pi Framework (installed at /Users/richardthombs/.nvm/versions/node/v24.13.1/lib/node_modules/@mariozechner/pi-coding-agent)
-- `dist/main.js` — CLI entry, `--no-session` → `SessionManager.inMemory()`, normal → `SessionManager.create()`
-- `dist/modes/rpc/rpc-client.js` + `rpc-client.d.ts` — **RpcClient class** (long-running agent embedding API)
-  - `start()`, `stop()`, `prompt()`, `waitForIdle()`, `compact()`, `newSession()`, `clone()`, `getLastAssistantText()`, `getSessionStats()`
-  - Spawns with `--mode rpc`; `args` passed through to CLI at spawn time (so `--no-session`, `--append-system-prompt` etc. work)
+### Pi Framework
+Installed at `/Users/richardthombs/.nvm/versions/node/v24.13.1/lib/node_modules/@mariozechner/pi-coding-agent`
+- `dist/modes/rpc/rpc-client.js` + `rpc-client.d.ts` — **RpcClient** (long-running agent embedding API)
+  - API: `start()`, `stop()`, `prompt()`, `waitForIdle()`, `compact()`, `newSession()`, `clone()`, `getLastAssistantText()`, `getSessionStats()`
+  - Spawns child with `--mode rpc`; `args` array passed through to CLI at spawn time
 - `dist/modes/rpc/rpc-types.d.ts` — full RPC protocol type definitions
-- `dist/modes/rpc/rpc-mode.js` — server side (handles `compact`, `new_session`, `switch_session`, etc.)
 
-### Sessions
-- `--no-session` → in-memory only, no JSONL file
-- Named session: `--session <path>` to resume; `SessionManager.open()` / `SessionManager.create()`
-- Sessions live in configured `sessionDir` (default `.pi/sessions/`)
-
-## Design Work Produced
-
-### Member Persistence Design
-- File: `/Users/richardthombs/dev/pit2/.pi/docs/design-member-persistence.md`
-- Three options: A (session file replay), B (live RPC), C (session-backed RPC)
-- **Recommendation: Option B** — use `RpcClient` per member in a module-level Map
-- Key insight: `RpcClient` is already written by the framework, this is the designed embedding API
-- Proposed ADR-004 in the document
-- Memory file injection problem identified: currently injected at spawn, with persistent clients it must shift to explicit follow-up after each task
-- Parallel mode uses persistent clients (resolveOrScale guarantees each member is idle at assignment time; no RpcClient ever gets concurrent prompt() calls)
-
-## ADRs Produced
-- ADR-004 (Proposed): Team Member Persistence via RPC Clients — in design doc above
-
-## Implementation Spec Produced
-- File: `/Users/richardthombs/dev/pit2/.pi/docs/spec-member-persistence-implementation.md`
-- Covers all 10 areas: liveMembers map, getOrCreateClient, runTask refactor, idle reaping, /fire updates, memory injection, streaming, cancellation, error handling, what stays the same
-- Status: **IMPLEMENTED** — all spec items are live in the codebase as of this review
+### Design / Spec Docs
+- `/Users/richardthombs/dev/pit2/.pi/docs/design-member-persistence.md` — Options A/B/C, ADR-004 (Proposed)
+- `/Users/richardthombs/dev/pit2/.pi/docs/spec-member-persistence-implementation.md` — implementation spec (fully implemented)
+- `/Users/richardthombs/dev/pit2/.pi/docs/spec-beads-integration-a.md` — Integration A (EM-only beads persistence) implementation spec
 
 ## Pitfalls / Gotchas
-- `--append-system-prompt` in RpcClient.args applies once at session start; subsequent `newSession()` calls would lose it (needs verification)
-- System prompt files need to be stable (not temp files) for persistent clients
-- `/fire` command handler needs to stop/remove any live client for that member
-- Two concurrent EM sessions on same project could conflict on same member client (punted)
-- `resolveOrScale` guarantees a named member is always IDLE before assignment — if busy it auto-hires a new member of that role. So no RpcClient ever receives concurrent prompt() calls. Parallel mode can safely use persistent clients.
-- ADR-004 updated: all delegation modes use persistent clients; no hybrid needed.
-- `RpcClient` IS exported from `@mariozechner/pi-coding-agent` main index — safe to import directly
-- `RpcClient` hardcodes `node` as executor; use `cliPath: process.argv[1]` for node-based deployments; bun-compiled binary path unsupported without patching
-- `AgentEvent.message_end.message` is `AgentMessage`; check `.role === 'assistant'` and cast to `AssistantMessage` (from `@mariozechner/pi-ai`) to get `.usage`
-- `message_update` fires live per-token; `tool_execution_start` fires when a tool is invoked
-- Memory injection: stable system prompt file at `.pi/prompts/members/<slug>.md` (no file contents); contents injected once via initializeClientMemory() after client.start()
-- `waitForIdle()` default 60s; spec uses 600_000ms for tasks, 30_000ms for memory init
-- Crash recovery: access `(client as any).process` for exit listener; remove from liveMembers on exit
+
+- **`cliPath`**: `RpcClient` hardcodes `node` as executor; must set `cliPath: process.argv[1]` for correct node-based invocation. Bun-compiled binary unsupported without patching.
+- **`waitForIdle()` default is 60 s** — too short for real tasks; use 600_000 ms for task prompts, 30_000 ms for memory init.
+- **`--append-system-prompt` + `newSession()`**: the flag is applied at spawn time; calling `newSession()` later may drop it. Unverified — worth checking if session cycling is ever added.
+- **Concurrent EM sessions**: two EM sessions on the same project would share `liveMembers` state and conflict. Punted; no solution in place.
+- **`resolveOrScale` guarantees idle-before-assign**: a named member that is busy gets a new clone hired instead. No `RpcClient` ever receives concurrent `prompt()` calls — safe assumption for all delegation modes.
+- **Crash recovery**: `(client as any).process` is how you access the child process handle on `RpcClient` (not a public property); attach exit listener there.
+- **Event type narrowing**: `AgentEvent.message_end.message` is typed as `AgentMessage`; check `.role === 'assistant'` and cast to `AssistantMessage` (from `@mariozechner/pi-ai`) to access `.usage`.
+- **Member system prompt path**: `.pi/prompts/members/<slug>.md` — stable file used as the system prompt for each member's `RpcClient`.
+
+## Beads (Integration A) — Key Decisions
+
+- **7 registered tools** (not bash) for bd access: `bd_workstream_start`, `bd_task_create`, `bd_task_update`, `bd_dep_add`, `bd_list`, `bd_show`, `bd_ready`.
+- **`BEADS_DIR=<ctx.cwd>/.beads`** env var drives all bd commands; set in `runBd` helper via `execFile` env option.
+- **Init at `session_start`**: `ensureBeadsInit` checks if `.beads/` dir exists; runs `bd init --stealth --non-interactive` if not; sets `beadsReady` Map; non-fatal on failure.
+- **`beadsReady` Map** keyed by `cwd`; `true`=ready, `false`=unavailable; tools check it via `beadsGuard()` inline helper.
+- **`execFile` + `promisify`**: add `execFileCb` to the existing `node:child_process` import; add `promisify` from `node:util`.
+- **`.beads/` in `.gitignore`**: confirmed — add to project root `.gitignore`.
+- **SYSTEM.md insertion point**: new "Workstream State (Beads)" section between last "How to Work" para and `## Working Practices` heading.
+
+## Beads CLI Verified Facts (Mercer Lin, 2026-05-01)
+
+- **`bd create` flags**: `--type`, `--parent`, `--design`, `--notes` all valid. Returns **single object** `{id, title, ...}` — NOT array. Add `if (!result?.id) throw` defensively.
+- **`bd update` flags**: `--status`, `--notes` (replace), `--append-notes` (append, preferred), `--design` valid. Returns **array** `[{...}]` — use `[0]`.
+- **`bd show` flags**: `--json`. Returns **array** `[{...}]` — use `[0]`.
+- **`bd close`**: preferred for marking completion. `bd close <id> --reason="..." --json`. Returns array. Sets `closed_at` correctly.
+- **`bd dep add` arg order**: `bd dep add <blocked-id> <blocker-id>` — first arg IS blocked, second IS blocker. Counter-intuitive.
+- **`bd list --status`**: comma-separated string `--status=open,in_progress`. Repeating the flag returns empty array (bug/quirk).
+- **Valid statuses**: `open`, `in_progress`, `blocked`, `deferred`, `closed`, `pinned`, `hooked`. No `done`, no `cancelled`.
+- **`bd init` needs `--non-interactive`** when stdin is not a TTY (always true in execFile).
+- **`bd ready` includes epics** — use `--type=task` to filter to delegatable tasks only.
+- **`bd` emits `beads.role` warning to stderr** on every command if not configured — doesn't corrupt JSON stdout but is noisy.

@@ -47,18 +47,6 @@
       "name": "Mercer Lin",
       "role": "beads-specialist",
       "hiredAt": "2026-04-30T04:38:53.887Z"
-    },
-    {
-      "id": "quinn-patel",
-      "name": "Quinn Patel",
-      "role": "typescript-engineer",
-      "hiredAt": "2026-04-30T11:48:37.498Z"
-    },
-    {
-      "id": "lennox-ibrahim",
-      "name": "Lennox Ibrahim",
-      "role": "qa-engineer",
-      "hiredAt": "2026-04-30T11:50:43.111Z"
     }
   ],
   "usedNames": [

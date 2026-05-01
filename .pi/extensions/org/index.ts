@@ -17,7 +17,10 @@
  *   delegate — single / parallel / chain delegation modes
  */
 
-import { type ChildProcess } from "node:child_process";
+import { type ChildProcess, execFile as execFileCb } from "node:child_process";
+import { promisify } from "node:util";
+
+const execFile = promisify(execFileCb);
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -516,6 +519,63 @@ async function runTask(
 	}
 }
 
+// ─── Beads helpers ───────────────────────────────────────────────────────────
+
+/**
+ * Run a bd command with BEADS_DIR set to <cwd>/.beads.
+ * Returns { stdout, stderr } on success.
+ * Throws on non-zero exit code (the error object carries .stdout and .stderr).
+ */
+async function runBd(
+	cwd: string,
+	args: string[],
+): Promise<{ stdout: string; stderr: string }> {
+	const beadsDir = path.join(cwd, ".beads");
+	return execFile("bd", args, {
+		cwd,
+		env: { ...process.env, BEADS_DIR: beadsDir },
+		timeout: 15_000, // 15 s — bd commands are always fast; treat timeout as an error
+	});
+}
+
+/**
+ * Module-level beads readiness registry.
+ * true  = bd is available and .beads/ has been initialised for this cwd.
+ * false = bd is unavailable or init failed; tools will surface a friendly error.
+ */
+const beadsReady = new Map<string, boolean>();
+
+/**
+ * Idempotent initialisation. Safe to call on every session_start.
+ * On success sets beadsReady(cwd) = true.
+ * On failure sets beadsReady(cwd) = false and calls notifyFn with a warning.
+ */
+async function ensureBeadsInit(
+	cwd: string,
+	notifyFn: (msg: string, level: "info" | "warn" | "error") => void,
+): Promise<void> {
+	if (beadsReady.has(cwd)) return; // already attempted this session
+
+	const beadsDir = path.join(cwd, ".beads");
+
+	// .beads/ already exists → assume initialised, no need to re-init
+	if (fs.existsSync(beadsDir)) {
+		beadsReady.set(cwd, true);
+		return;
+	}
+
+	try {
+		await runBd(cwd, ["init", "--stealth", "--non-interactive"]);
+		beadsReady.set(cwd, true);
+	} catch (err: any) {
+		const msg =
+			`Beads init failed (is bd installed and on PATH?): ${err?.message ?? err}. ` +
+			`Workstream tracking will be unavailable this session.`;
+		notifyFn(msg, "warn");
+		beadsReady.set(cwd, false);
+	}
+}
+
 // ─── Stream snippet helpers ──────────────────────────────────────────────────
 
 const ANSI_STRIP_RE = /\x1b\[[0-9;]*[a-zA-Z]/g;
@@ -788,6 +848,8 @@ export default function (pi: ExtensionAPI) {
 		reaperInterval = setInterval(() => {
 			reapIdleClients();
 		}, 60_000);
+
+		await ensureBeadsInit(ctx.cwd, (msg, level) => ctx.ui.notify(msg, level));
 	});
 
 	pi.on("session_shutdown", async () => {
@@ -1054,6 +1116,272 @@ export default function (pi: ExtensionAPI) {
 				content: [{ type: "text", text: `${member.name} (${member.role}) has left the team.` }],
 				details: { member },
 			};
+		},
+	});
+
+	// ── beads workstream tools ──────────────────────────────────────────────────
+
+	/** Returns an error result if beads is not available for ctx.cwd. */
+	function beadsGuard(cwd: string): { content: [{ type: "text"; text: string }]; details: {}; isError: true } | null {
+		if (beadsReady.get(cwd) !== true) {
+			return {
+				content: [{ type: "text", text: "Beads is not available (bd not installed or init failed). Workstream tracking is disabled." }],
+				details: {},
+				isError: true,
+			};
+		}
+		return null;
+	}
+
+	pi.registerTool({
+		name: "bd_workstream_start",
+		label: "Workstream Start",
+		description:
+			"Create a beads epic to represent a new workstream. Call this when initiating any multi-step or multi-session effort. Returns the epic ID, which you must record for attaching tasks.",
+		promptSnippet: "Start a tracked workstream",
+		parameters: Type.Object({
+			title: Type.String({
+				description: "Short, unique workstream title. Should match the workstream label you use in your delegation notes (e.g. 'auth-refactor', 'onboarding-docs').",
+			}),
+			design: Type.Optional(Type.String({
+				description: "Rationale for why this workstream is being started; the decision or requirement that prompted it.",
+			})),
+		}),
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			const guard = beadsGuard(ctx.cwd);
+			if (guard) return guard;
+
+			const args = ["create", params.title, "--type=epic", "--json"];
+			if (params.design) args.push(`--design=${params.design}`);
+
+			try {
+				const { stdout } = await runBd(ctx.cwd, args);
+				const result = JSON.parse(stdout) as { id: string; title: string; [k: string]: unknown };
+				if (!result?.id) throw new Error(`bd create returned unexpected shape: ${stdout}`);
+				return {
+					content: [{ type: "text", text: `Epic created. ID: ${result.id} — "${result.title}"` }],
+					details: { id: result.id, title: result.title },
+				};
+			} catch (err: any) {
+				throw new Error(`bd_workstream_start failed: ${err?.stderr ?? err?.message ?? err}`);
+			}
+		},
+	});
+
+	pi.registerTool({
+		name: "bd_task_create",
+		label: "Task Create",
+		description:
+			"Create a beads task to represent a unit of delegated work. Attach it to an epic with epic_id if this task is part of a tracked workstream. Returns the task ID.",
+		promptSnippet: "Create a tracked task bead",
+		parameters: Type.Object({
+			title: Type.String({
+				description: "Brief description of the task being delegated.",
+			}),
+			epic_id: Type.Optional(Type.String({
+				description: "ID of the parent epic (from bd_workstream_start). Omit only if this is a standalone task with no workstream.",
+			})),
+			design: Type.Optional(Type.String({
+				description: "Rationale for this task — why it is needed, what decision it implements.",
+			})),
+		}),
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			const guard = beadsGuard(ctx.cwd);
+			if (guard) return guard;
+
+			const args = ["create", params.title, "--type=task", "--json"];
+			if (params.epic_id) args.push(`--parent=${params.epic_id}`);
+			if (params.design) args.push(`--design=${params.design}`);
+
+			try {
+				const { stdout } = await runBd(ctx.cwd, args);
+				const result = JSON.parse(stdout) as { id: string; title: string; [k: string]: unknown };
+				if (!result?.id) throw new Error(`bd create returned unexpected shape: ${stdout}`);
+				return {
+					content: [{ type: "text", text: `Task created. ID: ${result.id} — "${result.title}"` }],
+					details: { id: result.id, title: result.title },
+				};
+			} catch (err: any) {
+				throw new Error(`bd_task_create failed: ${err?.stderr ?? err?.message ?? err}`);
+			}
+		},
+	});
+
+	pi.registerTool({
+		name: "bd_task_update",
+		label: "Task Update",
+		description:
+			"Update a beads task. Typically called after a delegation completes to close it (status: 'closed') and record key findings. Also use to mark a task in_progress when delegation starts. When status is 'closed', internally uses bd close which sets closed_at correctly.",
+		promptSnippet: "Update a beads task status or notes",
+		parameters: Type.Object({
+			id: Type.String({
+				description: "The beads task or epic ID to update.",
+			}),
+			status: Type.Optional(Type.Union(
+				[
+					Type.Literal("open"),
+					Type.Literal("in_progress"),
+					Type.Literal("blocked"),
+					Type.Literal("deferred"),
+					Type.Literal("closed"),
+				],
+				{ description: "New status for the issue. Use 'closed' to mark completion (routes to bd close internally)." },
+			)),
+			notes: Type.Optional(Type.String({
+				description: "Key findings or output summary from the completed task. Concise — this is the persistent record.",
+			})),
+			design: Type.Optional(Type.String({
+				description: "Update the design/rationale field (use if the approach changed during execution).",
+			})),
+		}),
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			const guard = beadsGuard(ctx.cwd);
+			if (guard) return guard;
+
+			try {
+				let result: { id: string; status: string; [k: string]: unknown };
+				if (params.status === "closed") {
+					// Use bd close to set closed_at correctly; notes passed as --reason
+					const closeArgs = ["close", params.id, "--json"];
+					if (params.notes) closeArgs.push(`--reason=${params.notes}`);
+					const { stdout } = await runBd(ctx.cwd, closeArgs);
+					result = (JSON.parse(stdout) as Array<{ id: string; status: string; [k: string]: unknown }>)[0];
+				} else {
+					const args = ["update", params.id, "--json"];
+					if (params.status) args.push(`--status=${params.status}`);
+					if (params.notes) args.push(`--append-notes=${params.notes}`);
+					if (params.design) args.push(`--design=${params.design}`);
+					const { stdout } = await runBd(ctx.cwd, args);
+					result = (JSON.parse(stdout) as Array<{ id: string; status: string; [k: string]: unknown }>)[0];
+				}
+				return {
+					content: [{ type: "text", text: `Updated ${result.id}: status=${result.status}` }],
+					details: result,
+				};
+			} catch (err: any) {
+				throw new Error(`bd_task_update failed: ${err?.stderr ?? err?.message ?? err}`);
+			}
+		},
+	});
+
+	pi.registerTool({
+		name: "bd_dep_add",
+		label: "Dep Add",
+		description:
+			"Record that one task blocks another (i.e. blocked_id cannot start until blocker_id is done). Use this to encode chain step ordering and parallel-merge gates.",
+		promptSnippet: "Add a blocks dependency between tasks",
+		parameters: Type.Object({
+			blocker_id: Type.String({
+				description: "ID of the task that must complete first.",
+			}),
+			blocked_id: Type.String({
+				description: "ID of the task that cannot start until blocker_id is done.",
+			}),
+		}),
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			const guard = beadsGuard(ctx.cwd);
+			if (guard) return guard;
+
+			try {
+				// Argument order: bd dep add <blocked> <blocker> — first arg is the dependent task
+				await runBd(ctx.cwd, ["dep", "add", params.blocked_id, params.blocker_id, "--type=blocks"]);
+				return {
+					content: [{ type: "text", text: `Dependency added: ${params.blocker_id} blocks ${params.blocked_id}` }],
+					details: { blocker: params.blocker_id, blocked: params.blocked_id },
+				};
+			} catch (err: any) {
+				throw new Error(`bd_dep_add failed: ${err?.stderr ?? err?.message ?? err}`);
+			}
+		},
+	});
+
+	pi.registerTool({
+		name: "bd_list",
+		label: "List",
+		description:
+			"List beads issues. Use to reconstruct workstream state after context compaction. By default returns only open/in_progress issues to reduce noise.",
+		promptSnippet: "List beads workstream state",
+		parameters: Type.Object({
+			type: Type.Optional(Type.Union(
+				[Type.Literal("epic"), Type.Literal("task")],
+				{ description: "Filter by issue type. Omit to return all." },
+			)),
+			status: Type.Optional(Type.String({
+				description: "Filter by status (e.g. 'open', 'in_progress', 'closed'). Valid values: open, in_progress, blocked, deferred, closed. Defaults to 'open,in_progress' if not specified.",
+			})),
+		}),
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			const guard = beadsGuard(ctx.cwd);
+			if (guard) return guard;
+
+			const args = ["list", "--limit=0", "--json"];
+			if (params.type) args.push(`--type=${params.type}`);
+			// Default to open+in_progress to prevent returning large completed history.
+			// Use comma-separated syntax — repeating the flag returns an empty array.
+			args.push(`--status=${params.status ?? "open,in_progress"}`);
+
+			try {
+				const { stdout } = await runBd(ctx.cwd, args);
+				const items = JSON.parse(stdout) as unknown[];
+				return {
+					content: [{ type: "text", text: JSON.stringify(items, null, 2) }],
+					details: { count: items.length, items },
+				};
+			} catch (err: any) {
+				throw new Error(`bd_list failed: ${err?.stderr ?? err?.message ?? err}`);
+			}
+		},
+	});
+
+	pi.registerTool({
+		name: "bd_show",
+		label: "Show",
+		description:
+			"Show full details of a single beads issue, including its design rationale, notes, dependencies, and status. Use when you need to recall the specifics of one workstream or task.",
+		promptSnippet: "Show a single beads issue",
+		parameters: Type.Object({
+			id: Type.String({
+				description: "The beads issue ID to retrieve.",
+			}),
+		}),
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			const guard = beadsGuard(ctx.cwd);
+			if (guard) return guard;
+
+			try {
+				const { stdout } = await runBd(ctx.cwd, ["show", params.id, "--json"]);
+				const item = (JSON.parse(stdout) as Array<Record<string, unknown>>)[0];
+				return {
+					content: [{ type: "text", text: JSON.stringify(item, null, 2) }],
+					details: item,
+				};
+			} catch (err: any) {
+				throw new Error(`bd_show failed: ${err?.stderr ?? err?.message ?? err}`);
+			}
+		},
+	});
+
+	pi.registerTool({
+		name: "bd_ready",
+		label: "Ready",
+		description:
+			"Return the set of tasks that have no unresolved blocking dependencies — i.e. tasks whose prerequisite work is done and that are safe to start. Use to identify what to delegate next in a multi-step workstream.",
+		promptSnippet: "Get the beads ready front",
+		parameters: Type.Object({}),
+		async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+			const guard = beadsGuard(ctx.cwd);
+			if (guard) return guard;
+
+			try {
+				const { stdout } = await runBd(ctx.cwd, ["ready", "--json"]);
+				const items = JSON.parse(stdout) as unknown[];
+				return {
+					content: [{ type: "text", text: items.length === 0 ? "No tasks in ready state." : JSON.stringify(items, null, 2) }],
+					details: { count: items.length, items },
+				};
+			} catch (err: any) {
+				throw new Error(`bd_ready failed: ${err?.stderr ?? err?.message ?? err}`);
+			}
 		},
 	});
 
