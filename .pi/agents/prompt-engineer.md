@@ -1,7 +1,7 @@
 ---
 name: prompt-engineer
 description: Crafts and refines agent system prompts, designs role personas, optimises instructions for clarity and LLM compliance, and defines behavioral guidelines for multi-agent systems.
-tools: read, write, edit, grep, find, ls
+tools: read, write, edit, bash, grep, find, ls
 memory: true
 ---
 

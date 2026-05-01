@@ -502,16 +502,6 @@ The current design tracks one `lastActiveCwd` for the 30s safety-net poll. If th
 
 **Recommendation:** Extend the broker to maintain a `Set<string>` of active cwds (populated on first `bd_task_create` in each cwd while broker is active) and poll all of them. Low priority — multi-cwd is uncommon.
 
-### OQ-3: `bd show --json` blocked-by dependency field name
-
-Upstream findings injection (§17.4) requires reading a task's blocked-by dep IDs from `bd show <id> --json`. The field name is unconfirmed. Based on CLI vocabulary (`bd dep add <blocked-id> <blocker-id>`) it is likely `deps.blockedBy`, `blocked_by`, or similar — but must be verified from Go source before implementation.
-
-**Fallback if `bd show` does not include deps:** add a hook to the `bd_dep_add` tool that populates a broker-internal `Map<taskId, Set<blockerId>>` at creation time (§17.4). This eliminates any dependency on `bd show` for dep lookup.
-
-### OQ-4: `bd close --reason` character limit
-
-§17.3 caps the close summary at 150 chars. If the CLI enforces a shorter limit internally, the cap should be adjusted. Verify from Go source or empirically.
-
 ### OQ-5: `.pi/task-results/` — ephemeral or committed?
 
 Large agent text outputs written by the broker to `.pi/task-results/` are potentially meaningful artifacts (research findings, design documents in progress). Whether to commit them to git is context-dependent. The broker does not make any git commits — it only writes the file. The EM or a `release-engineer` pass decides what to commit.
@@ -703,7 +693,7 @@ function summarise(output: string): string {
 await runBd(['close', taskId, `--reason=${summarise(result.output)}`, '--json'], cwd);
 ```
 
-The 150-char cap is a conservative limit. OQ-4 tracks whether `bd close --reason` enforces a shorter CLI-level limit.
+The 150-char cap is the broker's own convention. `bd close --reason` has no application-level length limit (64KB Dolt ceiling only); `--reason-file` is available for longer structured content.
 
 #### File-change path
 
@@ -779,23 +769,20 @@ When the broker dispatches task B, it checks whether B has any resolved blockers
 
 #### Step 1: Retrieve blocker IDs
 
-The broker calls `bd show <taskId> --json` on the task being dispatched and reads the dependency list. The field name for blocked-by deps is unconfirmed — see OQ-3 in §14. The implementation must verify the exact field name from the Go source or live testing before coding this step.
+The broker calls `bd show <taskId> --json` on the task being dispatched and reads `task.dependencies`. The confirmed field name is `dependencies` — an array of full issue objects each carrying a `dependency_type` field. Broker filters by `dependency_type === 'blocks'` to exclude parent-child and related links. The field is `omitempty` — null-check before iterating.
 
-Fallback (if `bd show` does not include dep fields): the `bd_dep_add` tool populates a broker-internal `Map<taskId, Set<blockerId>>` at creation time. This is a complete fallback — no `bd show` call is needed for dep lookup in this mode.
+Critically, each element in `dependencies` is a **full issue object** (title, notes, metadata, etc.) — no additional `bd show` calls per blocker are needed.
 
 ```typescript
-// Preferred path (assumes field name is confirmed as `deps.blockedBy`):
+// Confirmed field name: task.dependencies, filter by dependency_type === 'blocks'
 const showResult = await runBd(['show', taskId, '--json'], cwd);
 const task = JSON.parse(showResult)[0];
-const blockerIds: string[] = task.deps?.blockedBy ?? [];
-
-// Fallback path:
-const blockerIds: string[] = [...(this.depMap.get(taskId) ?? [])];
+const blockers = task.dependencies?.filter((d: any) => d.dependency_type === 'blocks') ?? [];
 ```
 
-#### Step 2: Fetch blocker results
+#### Step 2: Extract blocker results
 
-For each blocker ID, call `bd show <blockerId> --json` and extract the result fields:
+Each element of `blockers` is already a full issue object — no additional `bd show` call is needed per blocker. Extract result fields directly from the embedded object:
 
 ```typescript
 interface BlockerContext {
@@ -803,30 +790,22 @@ interface BlockerContext {
   summary: string; // one-line description of what was found
 }
 
-async function fetchBlockerContext(blockerId: string, cwd: string): Promise<BlockerContext | null> {
-  try {
-    const raw = await runBd(['show', blockerId, '--json'], cwd);
-    const bead = JSON.parse(raw)[0];
-    if (!bead) return null;
+function extractBlockerContext(d: any): BlockerContext {
+  const title = d.title ?? d.id ?? '(unknown)';
 
-    const title = bead.title ?? blockerId;
-
-    // Prefer: notes excerpt > git commit reference > result_file reference
-    const meta = bead.metadata ?? {};
-    if (meta.git_commit) {
-      return { title, summary: `see commit ${meta.git_commit}` };
-    }
-    if (meta.result_file) {
-      return { title, summary: `see file ${meta.result_file}` };
-    }
-    if (bead.notes) {
-      // Use the first 300 chars of notes as the summary snippet
-      return { title, summary: bead.notes.slice(0, 300).replace(/\n+/g, ' ').trim() };
-    }
-    return { title, summary: '(no result recorded)' };
-  } catch {
-    return null;
+  // Priority: git commit reference > result_file reference > notes excerpt
+  const meta = d.metadata ?? {};
+  if (meta.git_commit) {
+    return { title, summary: `see commit ${meta.git_commit}` };
   }
+  if (meta.result_file) {
+    return { title, summary: `see file ${meta.result_file}` };
+  }
+  if (d.notes) {
+    // Use the first 300 chars of notes as the summary snippet
+    return { title, summary: d.notes.slice(0, 300).replace(/\n+/g, ' ').trim() };
+  }
+  return { title, summary: '(no result recorded)' };
 }
 ```
 
@@ -838,12 +817,11 @@ The upstream context block is appended to the agent brief, capped at 2000 chars 
 const UPSTREAM_CAP = 2000;
 
 async function buildUpstreamContext(
-  blockerIds: string[], cwd: string
+  blockers: any[], cwd: string
 ): Promise<string> {
-  if (blockerIds.length === 0) return '';
+  if (blockers.length === 0) return '';
 
-  const contexts = (await Promise.all(blockerIds.map(id => fetchBlockerContext(id, cwd))))
-    .filter((c): c is BlockerContext => c !== null);
+  const contexts = blockers.map(d => extractBlockerContext(d));
 
   if (contexts.length === 0) return '';
 
@@ -856,7 +834,7 @@ async function buildUpstreamContext(
 The context block is appended to the dispatch brief before it is sent to the agent:
 
 ```typescript
-const upstreamContext = await buildUpstreamContext(blockerIds, cwd);
+const upstreamContext = await buildUpstreamContext(blockers, cwd);
 const fullBrief = upstreamContext
   ? `${baseBrief}\n\n${upstreamContext}`
   : baseBrief;
@@ -864,7 +842,7 @@ const fullBrief = upstreamContext
 
 #### When blockers are not yet closed
 
-The broker only dispatches a task when `bd ready` reports it (meaning all blockers are resolved in beads). A blocker that has not been closed will not appear in `bd ready`. Therefore, at dispatch time, all blockers in the dep chain should already be in a terminal state (closed). If `fetchBlockerContext` returns `null` for a blocker — due to a `bd show` failure or a bead in unexpected state — it is silently omitted from the context block. The task is still dispatched; incomplete upstream context is preferable to blocking dispatch entirely.
+The broker only dispatches a task when `bd ready` reports it (meaning all blockers are resolved in beads). A blocker that has not been closed will not appear in `bd ready`. Therefore, at dispatch time, all blockers in the dep chain should already be in a terminal state (closed). Their full data is embedded in `task.dependencies` — `extractBlockerContext` processes each one synchronously; no `bd show` error path applies here.
 
 ---
 
@@ -887,9 +865,8 @@ The following additions are required in `broker.ts` beyond the base design in §
 | `getHeadCommit(cwd)` | Utility: calls `git log -1 --format=%H`; returns null on failure |
 | `summarise(output)` | Utility: extracts first non-empty line, strips markdown, caps at 150 chars |
 | `Broker.captureResult()` | Replaces the inline `bd close` call after `runTask`; implements file-change vs text-output branching |
-| `fetchBlockerContext(id, cwd)` | Utility: `bd show` a blocker and extract result fields into a `BlockerContext` |
-| `buildUpstreamContext(ids, cwd)` | Composes and caps the upstream context block; called before brief is sent |
-| `Broker.depMap` | `Map<string, Set<string>>` — fallback dep tracking if `bd show` dep field is unavailable (OQ-3) |
+| `extractBlockerContext(d)` | Utility: extracts result fields from an embedded dependency object (no extra `bd show` call needed) |
+| `buildUpstreamContext(blockers, cwd)` | Composes and caps the upstream context block; called before brief is sent |
 | `node:fs/promises` import | Required for writing `.pi/task-results/<id>.md` |
 | `node:path` import | Required for constructing `outPath` |
 

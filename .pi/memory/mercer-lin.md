@@ -29,6 +29,10 @@
 - `priority` has **no omitempty** — always present, even at 0 (P0)
 - `dependencies`/`dependents` entries include `dependency_type` field (e.g., `"blocks"`, `"parent-child"`)
 - `parent` field is computed from parent-child dep and added at JSON serialization time
+- **`dependencies` = what THIS issue depends on (its blockers)**; `dependents` = what depends on THIS issue (downstream)
+- Each element is a **full embedded `Issue` object** + `dependency_type` string — broker gets blocker title/status/notes in one call, no follow-up needed
+- `dependencies` is `omitempty` — absent entirely when task has no deps; broker must handle missing key
+- To get only true blockers: filter `dependencies` where `dependency_type == "blocks"` (other values: `"related"`, `"parent-child"`, `"discovered-from"`)
 
 ## Key Beads Facts (Expensive to Rediscover)
 
@@ -110,6 +114,13 @@
 - Implemented as pure string concat in `update.go` with **zero length check** before DB write
 - The ceiling is Dolt's TEXT column limit (64KB), not an app-level guard
 - Hitting the cap will produce a Dolt error, not a clean beads error
+
+### `bd close --reason` length (OQ-4, verified close.go)
+- **No application-level character limit on `--reason`**
+- Only ceiling is the DB `close_reason TEXT` column = **64KB** (Dolt-enforced only)
+- `validation.on-close` config (default `"none"`) can warn/error on **short** reasons (<20 chars) — not a max cap
+- `--reason-file` flag reads reason from file/stdin — useful for structured broker close summaries
+- The reason string passes directly to `store.CloseIssue()` with zero length check
 
 ### No attachment mechanism
 - No `bd attach` command; no attachment table in any of the 32 schema migrations

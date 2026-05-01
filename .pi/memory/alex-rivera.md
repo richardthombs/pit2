@@ -44,6 +44,8 @@ Installed at `/Users/richardthombs/.nvm/versions/node/v24.13.1/lib/node_modules/
 - **Embedded mode viable** (no dolt server needed) because broker mediates all writes; agents have no direct `bd` access. Write serialisation queue needed for concurrent completions.
 - **Broker is opt-in**: activated via `bd_broker_start` tool. `delegate` tool unaffected.
 - **Stuck task recovery**: if `runTask` throws, broker resets task to `open` via `bd update --status=open` then notifies EM. 3-failure retry limit (in-memory) before skipping.
+- **OQ-3 resolved**: `bd show --json` dep field is `"dependencies"` (array of full issue objects with `dependency_type`). Filter by `dependency_type === 'blocks'`. Field is `omitempty`. Full blocker data (title, notes, metadata) is embedded — no extra `bd show` per blocker needed. `extractBlockerContext(d)` replaces `fetchBlockerContext(id, cwd)` in `buildUpstreamContext`. `Broker.depMap` fallback removed.
+- **OQ-4 resolved**: `bd close --reason` has no app-level length limit (64KB Dolt ceiling). 150-char cap is broker convention, not CLI constraint. `--reason-file` flag available for long content.
 - **Open: OQ-2** — task brief for agents composed from `title + design`; requires one `bd show` per dispatch (not per poll). Acceptable.
 - **ADR-005**: Proposed, documented in `design-beads-integration-b.md` §ADR-005.
 - **Option 1/2/3 dispatch path analysis (2026-05-01)**: Recommendation is Option 3 (two coexisting paths). Option 1 breaks chain mode (`{previous}` substitution requires live output). Option 2 adds complexity without capability (forced bead creation, epic assignment problem, broker becomes redundant wrapper). `delegate`=imperative, broker=declarative queue drain — genuinely different patterns.
