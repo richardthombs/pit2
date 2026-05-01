@@ -52,7 +52,7 @@ instructions rather than repeating general tool usage.
 When a task is delegated, the extension spawns a fresh `pi` subprocess:
 
 ```
-pi --mode json -p --no-session [--model ...] [--tools ...] --append-system-prompt <tmpfile> "Task for <name>: ..."
+pi --mode json -p --no-session [--model ...] [--tools ...] --system-prompt "" --no-context-files --append-system-prompt <tmpfile> "Task for <name>: ..."
 ```
 
 The role's system prompt is written to a temporary file, passed via `--append-system-prompt`, then deleted after the process exits. Output is streamed back as JSON events (`message_end`, `tool_result_end`).

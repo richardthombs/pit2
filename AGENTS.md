@@ -29,7 +29,7 @@ delegate { chain: [{ role: "software-architect", task: "design X" },
                    { role: "typescript-engineer", task: "implement {previous}" }] }
 ```
 
-Tasks must be self-contained: include all context the team member needs (file paths, specs, constraints). Team members have no memory of previous sessions.
+Tasks must be self-contained: include all context the team member needs (file paths, specs, constraints). Team members have persistent memory files (`.pi/memory/<member-id>.md`) but each task runs in a fresh context window — never assume a member recalls a previous conversation.
 
 ## Team widget
 

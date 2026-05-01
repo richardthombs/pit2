@@ -221,7 +221,7 @@ By default `delegate` runs synchronously — it blocks until all work is complet
 
 **Current state display:** The Engineering Manager line in the team widget shows the current mode: `async: on` or `async: off` alongside other session indicators. The state reflects the flag immediately after any `/async` command.
 
-**Session scope:** The flag resets to **off** whenever the session starts or `/reload` is invoked. There is no persistence across sessions.
+**Session scope:** The flag resets to **on** whenever the session starts or `/reload` is invoked. There is no persistence across sessions.
 
 **Interaction with the `async` parameter on `delegate`:** An explicit `async: true` or `async: false` argument passed directly to a `delegate` call always takes precedence over the session toggle. The session flag only applies when no explicit `async` parameter is given.
 
@@ -251,7 +251,12 @@ delegate { role: "qa-engineer", task: "..." }   # returns immediately
 | `✓` | done | Last task completed successfully |
 | `✗` | error | Last task failed |
 
-**Task preview:** While working, done, or errored, a snippet of the task description is shown next to the status. The snippet auto-sizes to fill all remaining terminal width after the fixed columns (prefix, name, role, status, usage), truncating with `…` if it overflows. The snippet is omitted entirely if there is not enough room.
+**Task preview:** While working, done, or errored, a snippet is shown next to the status symbol.
+
+- **Working:** Shows a live activity snippet — the last meaningful line of output from the subprocess, or `⚙ <tool-name>` when the member is invoking a tool. This updates in real time, throttled to approximately 6–7 fps (150 ms refresh interval).
+- **Done / error:** Shows a snippet of the task description.
+
+The snippet auto-sizes to fill all remaining terminal width after the fixed columns (prefix, name, role, status, usage), truncating with `…` if it overflows. The snippet is omitted entirely if there is not enough room.
 
 **When it updates:**
 - On session start or resume (all members reset to `idle`)
@@ -295,50 +300,41 @@ Token counts are formatted with `k`/`M` suffixes (e.g. `12.3k`, `1.2M`). Fields 
 
 ---
 
-## Per-role memory
+## Per-member memory
 
-**What it does:** Gives selected roles a persistent memory that carries forward across delegations. Each time a memory-enabled role completes a task, it can record new facts — conventions, decisions, pitfalls, codebase landmarks — and those facts are automatically included in the agent's context on the next delegation. Memory accumulates over time, so roles become progressively better-informed about the project.
+**What it does:** Gives every team member a persistent memory file that carries forward across delegations. Members self-maintain their own file — recording conventions, decisions, pitfalls, and codebase landmarks they discover — and that file is automatically included in their context on each subsequent delegation.
 
-**Opt-in:** Memory is not enabled for all roles. The roles that currently participate are: `typescript-engineer`, `software-architect`, `qa-engineer`, `prompt-engineer`, and `pi-specialist`. The `documentation-steward` and `technical-writer` roles do not use memory because their output tends to be project-specific rather than role-reusable knowledge.
+**Memory file location:** `.pi/memory/<member-id>.md` — one file per member, where the member ID is the member's name lowercased with spaces replaced by hyphens (e.g. `Casey Kim` → `casey-kim.md`). Files are created by the member on their first write; no setup is required.
 
-**Memory file location:** `.pi/memory/<role-name>.md` — one file per role, shared by all members of that role. Files are created automatically on the first write; no setup is needed.
+**Always on:** Memory injection is unconditional — there is no opt-in flag. Every member receives their memory context on every delegation, regardless of role.
 
-**How memory is injected:** When a delegation is dispatched to a memory-enabled role, if a memory file exists for that role, its contents are appended to the agent's system prompt under a `## Role Memory` heading. The agent sees this as background context for the task.
+**How memory is injected:** When `runTask()` spawns a subagent, it looks for a memory template at `.pi/prompts/memory.md`. The template contains `[name]` and `[path]` placeholders, which are replaced with the member's name and memory file path. If the template file is missing, a built-in fallback is used. The resulting block is appended to the agent's system prompt. If a memory file already exists for the member, its current contents are appended immediately after.
 
-**How agents write memory:** Agents surface new memories by emitting a structured comment block at the end of their response:
-
-```
-<!-- MEMORY
-section: Conventions
-entry: One concise sentence describing what to remember
--->
-```
-
-The org extension strips these blocks from the output the Engineering Manager sees, and writes the entries into the memory file.
-
-**Valid sections:**
-
-| Section | What belongs here |
-|---|---|
-| `Conventions` | Code style, naming patterns, project-level norms |
-| `Decisions` | Architectural or design choices that have been made |
-| `Pitfalls` | Known failure modes, gotchas, things to avoid |
-| `EM Preferences` | How the Engineering Manager likes things done |
-| `Codebase Landmarks` | Key files, entry points, module boundaries |
-| `Miscellaneous` | Anything useful that doesn't fit the above |
-
-**Bounds:** Each section holds a maximum of 10 entries. When a section is full, the oldest entry is dropped to make room (FIFO). Total memory is targeted at approximately 500 tokens.
-
-**Memory file format:** Plain markdown with YAML frontmatter (role, version, last_updated, entry_count) followed by fixed section headings. Files are human-editable directly — you can read, correct, or prune entries by hand.
-
-**Correcting stale entries:** Agents can flag outdated knowledge by emitting a new memory entry that notes the correction. There is no explicit delete mechanism; stale entries age out naturally under the FIFO limit.
+**How agents write memory:** Agents use their `write` and `edit` tools to update their memory file directly — no structured comment block or dispatcher involvement is needed. Agents decide what to record, how to organise it, and when to prune it. The memory file is plain markdown and can also be read or edited by hand.
 
 **Lifecycle:**
-- Memory files are created on the first write for a role; no bootstrapping is required.
-- Firing a team member does **not** delete the role's memory file. Memory is attached to the role, not the individual. If the role is staffed again, memory resumes from where it was.
-- Memory persists across sessions — it is the only team-level state that does.
+- Memory files are created by the member when they first have something to record.
+- Memory persists across sessions — it is the only per-member state that does.
+- Firing a member **deletes** their memory file. If the same role is hired again under a new name, the new member starts with no memory.
 
-**Out of scope:** Memory is not per-member — all members of the same role share one memory file. There is no way to scope memory to a specific member or task. There is no automatic summarisation; entries are stored verbatim and aged out by FIFO when the section limit is reached.
+**Out of scope:** There is no shared role-level memory — two members with the same role each have their own independent memory file. There is no automatic summarisation, section structure, or entry limit imposed by the system; members manage their own files freely.
+
+---
+
+## Subagent context isolation
+
+**What it does:** Ensures that each delegated subagent receives only its own role prompt and personal memory — not the Engineering Manager's system prompt or shared project context files.
+
+**How it works:** When `runTask()` spawns a subagent subprocess, it passes two additional flags:
+
+- `--system-prompt ""` — overrides the default system prompt with an empty string, preventing `.pi/SYSTEM.md` (the Engineering Manager prompt) from being loaded.
+- `--no-context-files` — prevents automatic injection of context files such as `AGENTS.md`.
+
+The agent's effective context is therefore: its role definition prompt (from `.pi/agents/<role>.md`) plus its personal memory block (from `.pi/memory/<member-id>.md` if it exists).
+
+**Why it matters:** Without isolation, subagents would inherit the Engineering Manager's instructions and shared project context. This produces role confusion and inflated context windows. Isolation keeps each subagent focused on its own role.
+
+**Out of scope:** Subagents can still read any file they are given access to via their tools. Isolation prevents automatic injection at spawn time; it does not restrict what the agent can read or write during a task.
 
 ---
 
