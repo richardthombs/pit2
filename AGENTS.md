@@ -38,13 +38,17 @@ For multi-step work, use the beads tools to externalise coordination state that 
 | Tool | Purpose |
 |---|---|
 | `bd_workstream_start` | Open a new workstream epic |
-| `bd_task_create` | Track a delegation as a task bead |
+| `bd_task_create` | Create a task bead. Pass `role` to mark it for broker dispatch. |
 | `bd_task_update` | Close a task and record findings |
 | `bd_dep_add` | Record ordering dependencies between tasks |
 | `bd_list` / `bd_show` | Reconstruct state after context compaction |
 | `bd_ready` | Find tasks with no open blockers |
+| `bd_broker_start` | Activate autonomous dispatch — broker claims ready labelled tasks and delegates them without EM involvement |
+| `bd_broker_stop` | Deactivate broker; in-flight tasks finish normally |
 
 State is stored in `.beads/` at the project root and persists across sessions. Beads is initialised automatically at session start.
+
+**Broker pattern:** Create tasks with a `role` label, record dependencies with `bd_dep_add`, then call `bd_broker_start`. The broker dispatches each task to an available member of the matching role as its blockers close. Tasks that fail 3 times are deferred and the EM is notified. Unlabelled tasks are ignored by the broker — use `delegate` for those.
 
 ## Team widget
 

@@ -374,6 +374,66 @@ Beads is for **EM coordination state** — tracking delegations within multi-ste
 
 ---
 
+## Broker (Integration B)
+
+**What it does:** Provides autonomous task dispatch from the beads ready queue to team members — without EM involvement. Once activated, the broker watches for tasks that have a `role` label and dispatches each one to an available team member with the matching role as soon as all of its blockers are resolved.
+
+**Activation:**
+
+| Tool | What it does |
+|---|---|
+| `bd_broker_start` | Activates the broker for the current session. Triggers an immediate dispatch cycle, then polls every 30 seconds. |
+| `bd_broker_stop` | Deactivates the broker. In-flight tasks complete normally; no new dispatches are triggered. |
+
+Both tools take no parameters.
+
+### Creating broker-owned tasks
+
+Pass a `role` parameter to `bd_task_create` to mark a task for broker dispatch:
+
+```json
+{ "title": "Implement auth middleware", "epic_id": "EP-1", "role": "typescript-engineer" }
+```
+
+The `role` value must match an agent slug in `.pi/agents/`. Unlabelled tasks are ignored by the broker — they remain EM-owned and should be dispatched manually via `delegate`.
+
+### Dispatch behaviour
+
+- **Readiness-triggered:** A task is dispatched only when all tasks that block it are closed. The broker checks readiness via `bd_ready`.
+- **Member resolution:** The broker calls the same resolution logic as `delegate` — it finds an available member with the requested role, or hires one if the roster allows.
+- **Upstream context injection:** Before dispatching, the broker reads the resolved blocker tasks and prepends a context summary (titles + notes/commit/file references from each blocker, capped at 2 000 characters) into the task brief. The subagent doesn't need to query its own dependencies.
+- **Task brief:** The agent is instructed to fetch full task detail from beads using `bd show <id>` at the start of the task.
+
+### Result capture
+
+On successful completion, the broker records results back into beads before closing the task:
+
+| Output type | How it's recorded |
+|---|---|
+| File changes (new git commit) | Commit SHA recorded in `metadata.git_commit` |
+| Text output ≤ 40 KB | Full output appended to `notes` |
+| Text output > 40 KB | Written to `.pi/task-results/<id>.md`; path recorded in `metadata.result_file` |
+
+### Failure handling
+
+- A failed task is re-opened (status reset to `open`) and re-queued for the next dispatch cycle.
+- After **3 consecutive failures**, the task is set to `deferred` and the EM is notified to intervene.
+- The EM should use `bd_show` to inspect the task, fix the brief or unblock the issue, then manually reset the status to `open` to re-enable dispatch.
+- Failure counts reset when the broker is restarted with `bd_broker_start`.
+
+### Coexistence with `delegate`
+
+The broker and the `delegate` tool are complementary:
+
+- Tasks **with** a `role` label → broker-owned; dispatched automatically.
+- Tasks **without** a `role` label → EM-owned; dispatched manually via `delegate`.
+
+Both can be used in the same session and the same workstream.
+
+**Out of scope:** The broker does not support parallel dispatch to multiple roles for a single task, custom retry delays, or priority ordering. All ready labelled tasks are dispatched in the order returned by `bd_ready`.
+
+---
+
 ## Name pool
 
 The system maintains a fixed pool of 30 gender-neutral names used for automatic assignment when hiring. Key properties:

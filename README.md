@@ -10,6 +10,7 @@ The system is hierarchical:
 - **Team members** are isolated pi subprocesses, each given a role-specific system prompt
 - The **org extension** wires everything together: it registers the `delegate` tool and the `/team`, `/roles`, `/hire`, `/fire` commands
 - A **roster file** tracks who is hired to which role
+- A **broker** (Integration B) can autonomously dispatch beads tasks to team members by role label, without EM involvement — activated via `bd_broker_start`
 
 Members have no shared state and cannot communicate with each other. All coordination happens through the Engineering Manager.
 
