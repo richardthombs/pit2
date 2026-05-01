@@ -56,11 +56,11 @@ Key facts:
 
 **`session_start` on reload** (`reason: "reload"` is allowed): clears `memberState`, `memberUsage`, `memberTimers`. Does NOT touch `liveMembers` (already cleared by `session_shutdown`). No new clients created in `session_start` — `getOrCreateClient` is lazy. No double-stop, no orphan conflict.
 
-**Fix**: In `session_shutdown`, replace fire-and-forget with:
+**Fire-and-forget fix already applied**: `session_shutdown` now does:
 ```ts
 await Promise.all([...liveMembers.values()].map(e => e.client.stop().catch(() => {})));
+liveMembers.clear();
 ```
-Safe because the full chain properly `await`s the handler before `process.exit(0)` on quit.
 
 ## `getSessionStats()` quirk (RPC mode)
 
@@ -74,8 +74,19 @@ if (event.type === "message_end" && event.message.role === "assistant") {
 
 `contextUsage.percent` plumbing: works correctly — `getContextUsage()` (agent-session.js:2378) computes `estimateContextTokens(this.messages).tokens / contextWindow * 100`. Returns `undefined` only if `this.model` unset or `contextWindow <= 0`. Returns `{ tokens: null, percent: null }` only right after compaction fires before the next assistant turn.
 
-## `ctx:XX%` widget display — why it never appears
+## `ctx:XX%` widget display — the reaper gap
 
-The 50% threshold in `buildWidgetLines()` is **effectively unreachable** with `claude-sonnet-4.6` via github-copilot. That model has `contextWindow: 1_000_000` (`models.generated.js`). A typical task uses 20K–80K tokens = 2–8%. You'd need 500K tokens to hit 50%.
+The 50% threshold was **removed** — `buildWidgetLines()` now shows `ctx:XX%` whenever `contextPct` is a non-null number:
+```ts
+const ctxStr = typeof state.contextPct === "number" ? ` ctx:${Math.round(state.contextPct)}%` : "";
+```
 
-**Fix**: lower threshold from `>= 50` to `>= 20` (or lower) in `index.ts` line 873. One-line change. 20% of 1M = 200K tokens, which is a meaningful amount.
+**Why it still doesn't appear after `/reload`**: `session_shutdown` stops and clears all `liveMembers`. `session_start` clears `memberState`. Clients are recreated lazily. The reaper only polls members where `state?.status === "working"` — so idle members after reload are never polled. `contextPct` stays `undefined` until a task completes via `runTaskWithStreaming()`.
+
+**Fix**: In the reaper, remove `if (state?.status !== "working") continue;` and change `if (current)` guard to:
+```ts
+const current = memberState.get(name) ?? { status: "idle" as MemberStatus };
+memberState.set(name, { ...current, contextPct: pct });
+anyUpdated = true;
+```
+This polls all live clients (idle and working alike). Since `liveMembers` is empty right after reload and repopulated lazily, the first post-reload task populates `contextPct` via `runTaskWithStreaming()`; the reaper fix keeps it current thereafter.

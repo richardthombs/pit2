@@ -45,6 +45,12 @@
 - `captureResult` closes AFTER artifact capture (spec pseudocode says close-then-capture, impl is safer)
 - `onTaskUpdated` has extra `taskId` param vs design spec — both call site and handler are consistent
 
+### Context Usage Polling
+- `runTaskWithStreaming` captures `contextPct` post-task via `entry.client.getSessionStats()`
+- Reaper `setInterval` (60s) also polls all `liveMembers` — fix landed as uncommitted working-tree change: removed `status !== "working"` filter, added `?? { status: "idle" }` fallback
+- `contextPct`: `undefined` = not polled, `null` = model doesn't report, `number` = percentage
+- Widget renders `ctx:XX%` unconditionally when `contextPct` is a number (threshold removed in `66905af`)
+
 ### Known Open Items (non-blocking)
 - `fmtTokens` imported in `index.ts` but never used — dead import, should be cleaned up
 - `MEMORY_DIR`, `VALID_MEMORY_SECTIONS`, `MAX_MEMORY_ITEMS_PER_SECTION`, `extractMemoryEntries()` remain as dead exports in `utils.ts` — harmless

@@ -966,21 +966,17 @@ export default function (pi: ExtensionAPI) {
 		reaperInterval = setInterval(async () => {
 			reapIdleClients();
 
-			// Piggyback: refresh context usage for all working members.
+			// Piggyback: refresh context usage for all live members.
 			let anyUpdated = false;
 			for (const [key, entry] of liveMembers) {
 				const sepIdx = key.indexOf("::");
 				const name = sepIdx >= 0 ? key.slice(sepIdx + 2) : key;
-				const state = memberState.get(name);
-				if (state?.status !== "working") continue;
 				try {
 					const stats = await entry.client.getSessionStats();
 					const pct = stats.contextUsage?.percent ?? null;
-					const current = memberState.get(name);
-					if (current) {
-						memberState.set(name, { ...current, contextPct: pct });
-						anyUpdated = true;
-					}
+					const current = memberState.get(name) ?? { status: "idle" as MemberStatus };
+					memberState.set(name, { ...current, contextPct: pct });
+					anyUpdated = true;
 				} catch {
 					// Non-fatal — leave contextPct at last known value
 				}
