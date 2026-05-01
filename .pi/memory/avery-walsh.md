@@ -6,4 +6,6 @@
 - Pushing to origin is permitted and expected for release tasks
 
 ## Branch notes
-- `beads-integration`: active workstream branch; Integration A (EM-only beads persistence) implemented; docs for Integrations B–D exist as design docs in `.pi/docs/`
+- `beads-integration`: active workstream branch; Integration A implemented; Integration B full design doc committed (`design-beads-integration-b.md`); Integrations C–D remain as earlier design docs in `.pi/docs/`
+- Last commit on branch: `cc557aa` — feat(org): Integration B result-capture design, session_shutdown fix, Finley Park onboarding
+- Team roster now includes: Finley Park (software-architect), onboarded 2026-05-01
