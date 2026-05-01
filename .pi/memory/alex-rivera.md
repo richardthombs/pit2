@@ -32,16 +32,35 @@ Installed at `/Users/richardthombs/.nvm/versions/node/v24.13.1/lib/node_modules/
 - **Event type narrowing**: `AgentEvent.message_end.message` is typed as `AgentMessage`; check `.role === 'assistant'` and cast to `AssistantMessage` (from `@mariozechner/pi-ai`) to access `.usage`.
 - **Member system prompt path**: `.pi/prompts/members/<slug>.md` — stable file used as the system prompt for each member's `RpcClient`.
 
-## Integration B Broker — Design Decisions (2026-05-01)
+## Integration B Broker — Design Decisions (2026-05-01, updated 2026-05-01)
 
+- **Full design doc**: `.pi/docs/design-beads-integration-b.md` — complete, standalone, includes ADR-005.
 - **Broker lives in `broker.ts`** within the org extension (not a separate extension), instantiated by `index.ts`. Tight coupling to `resolveOrScale`, `runTask`, `memberState` makes a separate extension non-viable.
 - **Event-driven via TS hooks, not beads events**: Beads has no pub/sub API. Broker is called synchronously from `bd_task_create` and `bd_task_update` tools after successful bd writes. 30s safety-net poll as fallback.
-- **Role tagging**: `bd_task_create` gets optional `role` param → stored in bead's `description` field as `role:<slug>`. Broker calls `bd show` per ready task to extract role. **Need Mercer to verify `bd show --json` exposes `description` field** (R3, not confirmed in sample output).
-- **`resolveOrScale` must be extracted** from the `delegate` tool closure to module scope — prerequisite refactor. New sig: `resolveOrScale(cwd, memberState, role?)`. ~20-line change.
+- **Role tagging uses native beads labels** (ADR-005): `bd_task_create` gets optional `role` param → `--label <role>` flag on `bd create`. Broker reads `task.labels?.[0]` from `bd ready --json` directly — **no `bd show` call needed for role routing**.
+- **`bd ready --json` includes `labels[]`** confirmed from Go source (`ready.go`). Bare slugs work; `provides:` prefix hard-fails.
+- **`bd show --json` `description` is `omitempty`** — absent if empty; check key presence. Not used for routing.
+- **`resolveOrScale` must be extracted** from the `delegate` tool closure to module scope — prerequisite refactor. New sig: `resolveOrScale(cwd, roster, memberState, role?, member?)`. ~6 call sites to update.
 - **Embedded mode viable** (no dolt server needed) because broker mediates all writes; agents have no direct `bd` access. Write serialisation queue needed for concurrent completions.
 - **Broker is opt-in**: activated via `bd_broker_start` tool. `delegate` tool unaffected.
-- **Stuck task recovery**: if `runTask` throws, broker resets task to `open` via `bd update --status=open` then notifies EM.
-- **ADR-005**: Proposed in design doc `design-broker-integration-b.md` (not yet written — this is the proposal stage).
+- **Stuck task recovery**: if `runTask` throws, broker resets task to `open` via `bd update --status=open` then notifies EM. 3-failure retry limit (in-memory) before skipping.
+- **Open: OQ-2** — task brief for agents composed from `title + design`; requires one `bd show` per dispatch (not per poll). Acceptable.
+- **ADR-005**: Proposed, documented in `design-beads-integration-b.md` §ADR-005.
+- **Option 1/2/3 dispatch path analysis (2026-05-01)**: Recommendation is Option 3 (two coexisting paths). Option 1 breaks chain mode (`{previous}` substitution requires live output). Option 2 adds complexity without capability (forced bead creation, epic assignment problem, broker becomes redundant wrapper). `delegate`=imperative, broker=declarative queue drain — genuinely different patterns.
+- **Label-as-ownership-signal invariant** (ADR-006): bead with role label = broker-owned; bead without label = EM-owned. Broker has explicit `if (!role) continue` guard — distinct from resolveOrScale failure path. ADR-006 documented in `design-beads-integration-b.md`.
+- **OQ-2 resolved**: broker dispatches with minimal brief: `"Your task is described in bead <id>. BEADS_DIR=<cwd>/.beads bd show <id> --json. Then <verb>."` Agent self-serves context. Verb from `ROLE_VERBS` map in Broker class.
+- **`bash` access gap**: `software-architect`, `technical-writer`, `prompt-engineer`, `documentation-steward` all lack `bash` in tools frontmatter. Must be added before broker can dispatch to these roles. Documented in §15 of design-beads-integration-b.md.
+- **Remaining open questions**: OQ-1 (failure count tracking in-memory vs beads) and OQ-2 (multi-cwd broker) — both low priority.
+
+## Integration B — Result Capture and Propagation (§17, 2026-05-01)
+
+- **§17 appended** to `design-beads-integration-b.md`. Full design: capture heuristic, `captureResult()`, upstream findings injection, fan-in.
+- **Capture heuristic**: `git log -1 --format=%H` before+after `runTask()`; SHA diff → file-change path; same SHA → text-output path.
+- **`captureResult()` branches**: file-change → `--set-metadata git_commit=<sha>`; text ≤40KB → `--append-notes`; text >40KB → write `.pi/task-results/<id>.md` + `--set-metadata result_file=<path>`.
+- **Close reason**: first non-empty line of output, markdown stripped, 150-char cap (OQ-4: CLI limit unverified).
+- **Upstream injection**: at dispatch time, `bd show <taskId>` for blocker dep IDs (field name unverified — OQ-3); `bd show` each blocker; priority order for summary: `metadata.git_commit` > `metadata.result_file` > `notes[:300]`; compose to 2000-char cap; append to brief.
+- **Dep field fallback**: if `bd show` dep field unavailable, `Broker.depMap: Map<taskId, Set<blockerId>>` populated by `bd_dep_add` tool hook.
+- **Fan-in**: no special logic — §17.4 handles N blockers naturally. Agent synthesises.
 
 ## Beads (Integration A) — Key Decisions
 

@@ -47,6 +47,12 @@
       "name": "Mercer Lin",
       "role": "beads-specialist",
       "hiredAt": "2026-04-30T04:38:53.887Z"
+    },
+    {
+      "id": "finley-park",
+      "name": "Finley Park",
+      "role": "software-architect",
+      "hiredAt": "2026-05-01T09:24:41.028Z"
     }
   ],
   "usedNames": [
@@ -62,6 +68,7 @@
     "Mercer Lin",
     "Zion Bergström",
     "Quinn Patel",
-    "Lennox Ibrahim"
+    "Lennox Ibrahim",
+    "Finley Park"
   ]
 }

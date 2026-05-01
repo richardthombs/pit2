@@ -865,9 +865,7 @@ export default function (pi: ExtensionAPI) {
 		}
 
 		// Stop all live member clients
-		for (const [, entry] of liveMembers) {
-			entry.client.stop().catch(() => {});
-		}
+		await Promise.all([...liveMembers.values()].map(e => e.client.stop().catch(() => {})));
 		liveMembers.clear();
 	});
 

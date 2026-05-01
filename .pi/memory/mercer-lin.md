@@ -96,6 +96,36 @@
 - EM uses workstream labels for async result correlation — fragile across context compaction
 - No dependency graph, no work queue, no agent state persistence across sessions
 
+## Storage Capabilities (Verified Against Schema + Source)
+
+### Field size limits (from `0001_create_issues.up.sql`)
+- `notes TEXT` → **64KB hard cap** (MySQL TEXT type = 65,535 bytes). No app-level check; ceiling is enforced by Dolt only.
+- `description TEXT`, `design TEXT`, `acceptance_criteria TEXT` → same 64KB cap
+- `external_ref VARCHAR(255)` → 255 bytes; indexed; for short external refs ("gh-123", URLs)
+- `spec_id VARCHAR(1024)` → 1KB; indexed; for specification document links
+- `metadata JSON` → effectively unlimited (~1GB, stored as LONGBLOB in Dolt)
+- `title VARCHAR(500)` → 500 chars; enforced at application level in `types.go Validate()`
+
+### `--append-notes` is NOT uncapped
+- Implemented as pure string concat in `update.go` with **zero length check** before DB write
+- The ceiling is Dolt's TEXT column limit (64KB), not an app-level guard
+- Hitting the cap will produce a Dolt error, not a clean beads error
+
+### No attachment mechanism
+- No `bd attach` command; no attachment table in any of the 32 schema migrations
+- beads is not an artifact store
+
+### `metadata JSON` is the right field for artefact references
+- Go type comment: "tool annotations, file lists, etc." — explicitly designed for this use
+- Supports incremental edits: `--set-metadata key=value`, `--unset-metadata key`
+- `bd show --json` returns full metadata verbatim (no truncation anywhere in JSON path)
+- Pattern for Integration B: agent writes artifact to file/git, stores ref in metadata:
+  `bd update <id> --set-metadata result_file=/path/to/result.json --set-metadata git_commit=<sha>`
+
+### `bd show --json` — no truncation
+- JSON path in `show.go` serialises full `IssueDetails` struct with `outputJSON(allDetails)` — no truncation, pagination, or max-length check anywhere
+- Full `notes`, `metadata`, `description`, etc. returned verbatim
+
 ## Integration Recommendations (From First Analysis)
 
 - **Best quick win**: EM uses bd to persist workstream state + decision rationale; survives context compaction; subagents don't need bd access (lowest friction)

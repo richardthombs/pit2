@@ -42,6 +42,26 @@ Key facts:
 - `.pi/APPEND_SYSTEM.md` (auto-discovered) is also re-read on reload.
 - Conversation history and the Agent instance are preserved across reload.
 
+## RpcClient process lifecycle on quit and reload
+
+**Shutdown call chain (quit)**: interactive-mode.js `shutdown()` → `await runtimeHost.dispose()` → `AgentSessionRuntime.dispose()` → `await emitSessionShutdownEvent(reason: "quit")` → `await extensionRunner.emit()` → `await handler()` → `process.exit(0)`.
+
+**`session_shutdown` fires on both quit AND reload.** The org extension handler has no `reason` check — runs identically in both cases.
+
+**The fire-and-forget bug** (`index.ts:868`): `entry.client.stop().catch(() => {})` — not awaited. The handler is `async` but contains no `await`, so it resolves immediately after scheduling the `stop()` Promises.
+
+**On quit**: `process.exit(0)` follows immediately, before the `stop()` async bodies execute. However, subprocesses self-terminate via stdin EOF (spawned with `stdio: ["pipe","pipe","pipe"]`; parent pipe FDs close on exit). No explicit SIGTERM sent — but no true orphan leak either.
+
+**On reload**: process stays alive; event loop continues; `stop()` bodies DO run in the await gaps between reload phases (`settingsManager.reload()`, `_resourceLoader.reload()`). SIGTERM is sent; 1 s SIGKILL fallback in `stop()` fires if needed. Cleanup works in practice.
+
+**`session_start` on reload** (`reason: "reload"` is allowed): clears `memberState`, `memberUsage`, `memberTimers`. Does NOT touch `liveMembers` (already cleared by `session_shutdown`). No new clients created in `session_start` — `getOrCreateClient` is lazy. No double-stop, no orphan conflict.
+
+**Fix**: In `session_shutdown`, replace fire-and-forget with:
+```ts
+await Promise.all([...liveMembers.values()].map(e => e.client.stop().catch(() => {})));
+```
+Safe because the full chain properly `await`s the handler before `process.exit(0)` on quit.
+
 ## `getSessionStats()` quirk (RPC mode)
 
 `client.getSessionStats()` returns aggregate totals but lacks per-turn `contextTokens`. For the same granularity as `--mode json` stdout, accumulate from `message_end` events:
