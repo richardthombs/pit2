@@ -71,3 +71,11 @@ if (event.type === "message_end" && event.message.role === "assistant") {
 }
 ```
 `getSessionStats()` shape: `{ tokens, cost, contextUsage: { tokens, contextWindow, percent } }` — no `totalTokens` per turn.
+
+`contextUsage.percent` plumbing: works correctly — `getContextUsage()` (agent-session.js:2378) computes `estimateContextTokens(this.messages).tokens / contextWindow * 100`. Returns `undefined` only if `this.model` unset or `contextWindow <= 0`. Returns `{ tokens: null, percent: null }` only right after compaction fires before the next assistant turn.
+
+## `ctx:XX%` widget display — why it never appears
+
+The 50% threshold in `buildWidgetLines()` is **effectively unreachable** with `claude-sonnet-4.6` via github-copilot. That model has `contextWindow: 1_000_000` (`models.generated.js`). A typical task uses 20K–80K tokens = 2–8%. You'd need 500K tokens to hit 50%.
+
+**Fix**: lower threshold from `>= 50` to `>= 20` (or lower) in `index.ts` line 873. One-line change. 20% of 1M = 200K tokens, which is a meaningful amount.

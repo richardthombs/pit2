@@ -868,9 +868,8 @@ export default function (pi: ExtensionAPI) {
 			const namePart = m.name.padEnd(20);
 			const rolePart = m.role.padEnd(22);
 			const usage = memberUsage.get(m.name);
-			// ctx:XX% suffix: shown only when >= 50 to suppress noise; 8 chars reserved
-			// unconditionally (when we have a number value) so layout doesn't shift at threshold.
-			const ctxStr = typeof state.contextPct === "number" && state.contextPct >= 50
+			// ctx:XX% suffix: shown whenever contextPct is a non-null number.
+			const ctxStr = typeof state.contextPct === "number"
 				? ` ctx:${Math.round(state.contextPct)}%`
 				: "";
 			const ctxReserve = typeof state.contextPct === "number" ? 8 : 0;
