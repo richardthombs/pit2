@@ -73,3 +73,8 @@
 - `runTask()` now loads template via `fs.readFileSync` in an inner try/catch; fallback is the old hardcoded string
 - QA APPROVED WITH NOTES: one trailing-newline discrepancy between template-derived and fallback memBlock — non-blocking
 - `fmtTokens` dead import in index.ts still present (noted in previous cycle, still not cleaned up)
+
+### memory.md Content Verified (2026-05-01, eighth review)
+- `.pi/prompts/memory.md` confirmed to match spec exactly
+- Both `[name]` and `[path]` placeholders present as literals
+- All sections, bullet counts, and wording match — no diff found

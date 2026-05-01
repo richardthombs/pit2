@@ -4,6 +4,9 @@
 Agent role definitions live in `/Users/richardthombs/dev/pit2/.pi/agents/*.md`.
 YAML frontmatter uses `tools:` (space-indented with a leading space: ` tools: …`).
 
+## memory.md template (2026-05-01)
+The template at `.pi/prompts/memory.md` was updated to add a two-part test for what's worth recording, an explicit don't-record list, and a pruning section. The rationale: cheap-to-rediscover facts and task-specific state shouldn't accumulate; short accurate memory > long cluttered memory.
+
 ## SYSTEM.md structure (2026-05-01)
 Section order in `/Users/richardthombs/dev/pit2/.pi/SYSTEM.md`:
 1. ## Your Team

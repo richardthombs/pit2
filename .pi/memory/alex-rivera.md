@@ -7,12 +7,15 @@ Senior software architect on the pit2 project (AI-powered software engineering o
 
 ### Org Extension
 - Main file: `/Users/richardthombs/dev/pit2/.pi/extensions/org/index.ts`
-- `runTask()` starts at line ~224 — spawns `--mode json -p --no-session --system-prompt "" --no-context-files`
-- `runTaskWithStreaming()` at line ~516 wraps `runTask()` with UI streaming
-- `delegate` tool registered at line ~889 — supports single / parallel (max 8) / chain modes
+- **Implementation is complete** — liveMembers, getOrCreateClient, initializeClientMemory, idle reaper, crash recovery all implemented
+- `runTask()` uses persistent RpcClient (not spawn-per-task)
+- `runTaskWithStreaming()` wraps `runTask()` with UI streaming
+- `delegate` tool supports single / parallel (max 8) / chain modes, plus async variants of all three
 - Member memory files: `.pi/memory/<member-slug>.md`
-- Parallel mode: `params.tasks` array, up to 8 concurrent spawns
-- `liveMembers` pattern does NOT exist yet — this would be new
+- Parallel mode: `params.tasks` array, up to 8 concurrent
+- `asyncMode` default true; toggled with `/async` command; overridden per-call with `async:` param
+- Auto-compaction enabled on each client at start
+- `--no-session` flag: NO conversation persisted to disk
 
 ### Pi Framework (installed at /Users/richardthombs/.nvm/versions/node/v24.13.1/lib/node_modules/@mariozechner/pi-coding-agent)
 - `dist/main.js` — CLI entry, `--no-session` → `SessionManager.inMemory()`, normal → `SessionManager.create()`
@@ -44,7 +47,7 @@ Senior software architect on the pit2 project (AI-powered software engineering o
 ## Implementation Spec Produced
 - File: `/Users/richardthombs/dev/pit2/.pi/docs/spec-member-persistence-implementation.md`
 - Covers all 10 areas: liveMembers map, getOrCreateClient, runTask refactor, idle reaping, /fire updates, memory injection, streaming, cancellation, error handling, what stays the same
-- Status: Ready for a typescript-engineer to implement directly
+- Status: **IMPLEMENTED** — all spec items are live in the codebase as of this review
 
 ## Pitfalls / Gotchas
 - `--append-system-prompt` in RpcClient.args applies once at session start; subsequent `newSession()` calls would lose it (needs verification)

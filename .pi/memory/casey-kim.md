@@ -36,3 +36,4 @@ TypeScript engineer specialising in pi coding agent extensions. Part of the pit2
   2. `runTask` catch: replaced bare `throw new Error(...)` with wrapped error that carries original `.cause` and includes `err.message` in the message string.
   3. Removed dead `spawn` import; updated stale file-header comment (was "spawns an isolated pi subprocess").
   4. Hardened `initializeClientMemory()` call with try/catch: on failure calls `stopLiveClient()` then rethrows, so broken clients are cleaned up immediately rather than waiting for the 10-min reaper.
+- 2026-05-01: Eighth task. Staged and committed all remaining unstaged/untracked changes as commit `2464849`: new docs (design + spec for member persistence), new named-member memory files (alex-rivera, jordan-blake, morgan-ellis, skyler-nguyen), updated casey-kim + sam-chen memories, deleted old role-named memory files (pi-specialist, prompt-engineer, qa-engineer, typescript-engineer), and memory template wording update.
