@@ -19,12 +19,6 @@
       "hiredAt": "2026-04-29T00:00:00Z"
     },
     {
-      "id": "casey-kim",
-      "name": "Casey Kim",
-      "role": "typescript-engineer",
-      "hiredAt": "2026-04-29T00:00:00Z"
-    },
-    {
       "id": "morgan-ellis",
       "name": "Morgan Ellis",
       "role": "qa-engineer",
@@ -53,6 +47,12 @@
       "name": "Finley Park",
       "role": "software-architect",
       "hiredAt": "2026-05-01T09:24:41.028Z"
+    },
+    {
+      "id": "remy-osei",
+      "name": "Remy Osei",
+      "role": "typescript-engineer",
+      "hiredAt": "2026-05-01T13:55:22.125Z"
     }
   ],
   "usedNames": [
@@ -69,6 +69,7 @@
     "Zion Bergström",
     "Quinn Patel",
     "Lennox Ibrahim",
-    "Finley Park"
+    "Finley Park",
+    "Remy Osei"
   ]
 }

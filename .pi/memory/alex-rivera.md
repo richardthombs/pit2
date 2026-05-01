@@ -32,6 +32,16 @@ Installed at `/Users/richardthombs/.nvm/versions/node/v24.13.1/lib/node_modules/
 - **Event type narrowing**: `AgentEvent.message_end.message` is typed as `AgentMessage`; check `.role === 'assistant'` and cast to `AssistantMessage` (from `@mariozechner/pi-ai`) to access `.usage`.
 - **Member system prompt path**: `.pi/prompts/members/<slug>.md` — stable file used as the system prompt for each member's `RpcClient`.
 
+## Context Usage Display — Design (2026-05-01)
+
+- **Bead**: pit2-3i1.1
+- **`contextPct?: number | null`** added to `MemberState`: `undefined`=not yet polled, `null`=model doesn't report, `number`=percentage.
+- **Collection**: post-task (after `runTaskWithStreaming()` resolves) + piggyback on existing 60 s reaper `setInterval` for working members. No new interval.
+- **Display**: `ctx:42%` appended to `usageStr` at row end. Only rendered when `>= 50` (suppress noise below threshold). Reserve 8 chars in `availableForTask` unconditionally when threshold may be met.
+- **Null/absent handling**: silent omit — no placeholder. Consistent with `formatUsage` zero-suppression.
+- **Change surface**: `MemberState` interface, `runTaskWithStreaming()` post-task hook, reaper callback, `buildWidgetLines()`. No changes to `utils.ts`/`UsageStats`.
+- **Risk**: `getSessionStats()` on a crashed client must be try/caught; leave `contextPct` at last value.
+
 ## Integration B Broker — Design Decisions (2026-05-01, updated 2026-05-01)
 
 - **Full design doc**: `.pi/docs/design-beads-integration-b.md` — complete, standalone, includes ADR-005.

@@ -758,6 +758,7 @@ interface MemberState {
 	status: MemberStatus;
 	task?: string;       // brief snippet of current/last task
 	streaming?: string;  // last live snippet from subprocess; only meaningful when status === "working"
+	contextPct?: number | null; // context window usage %: undefined=not polled, null=model doesn't report, number=percentage
 }
 
 // ─── Extension ────────────────────────────────────────────────────────────────
@@ -808,7 +809,7 @@ export default function (pi: ExtensionAPI) {
 		}, STREAM_REFRESH_INTERVAL_MS);
 	}
 
-	function runTaskWithStreaming(
+	async function runTaskWithStreaming(
 		config: AgentConfig,
 		memberName: string,
 		task: string,
@@ -816,7 +817,7 @@ export default function (pi: ExtensionAPI) {
 		signal?: AbortSignal,
 		onProgress?: (text: string) => void,
 	): Promise<RunResult> {
-		return runTask(config, memberName, task, cwd, signal, onProgress, (ev) => {
+		const result = await runTask(config, memberName, task, cwd, signal, onProgress, (ev) => {
 			const snippet = extractStreamSnippet(ev);
 			if (!snippet) return;
 			const state = memberState.get(memberName);
@@ -825,6 +826,22 @@ export default function (pi: ExtensionAPI) {
 				scheduleWidgetRefresh();
 			}
 		});
+
+		// Post-task: capture context usage percentage from the live client.
+		// Must be try/caught — client may have crashed during the task.
+		try {
+			const entry = liveMembers.get(liveMemberKey(cwd, memberName));
+			if (entry) {
+				const stats = await entry.client.getSessionStats();
+				const pct = stats.contextUsage?.percent ?? null;
+				const current = memberState.get(memberName);
+				if (current) memberState.set(memberName, { ...current, contextPct: pct });
+			}
+		} catch {
+			// Non-fatal — leave contextPct at last known value
+		}
+
+		return result;
 	}
 
 	function buildWidgetLines(cwd: string, width: number = 120): string[] {
@@ -851,13 +868,19 @@ export default function (pi: ExtensionAPI) {
 			const namePart = m.name.padEnd(20);
 			const rolePart = m.role.padEnd(22);
 			const usage = memberUsage.get(m.name);
-			const usageStr = usage && (usage.input > 0 || usage.output > 0)
-				? `  ${formatUsage(usage)}`
+			// ctx:XX% suffix: shown only when >= 50 to suppress noise; 8 chars reserved
+			// unconditionally (when we have a number value) so layout doesn't shift at threshold.
+			const ctxStr = typeof state.contextPct === "number" && state.contextPct >= 50
+				? ` ctx:${Math.round(state.contextPct)}%`
 				: "";
+			const ctxReserve = typeof state.contextPct === "number" ? 8 : 0;
+			const usageStr = (usage && (usage.input > 0 || usage.output > 0)
+				? `  ${formatUsage(usage)}`
+				: "") + ctxStr;
 			const fixed = prefix.length + 20 + 22 + 1 + 1 + state.status.length;
 			// usageStr contains only ASCII and narrow unicode (↑, ↓, digits, k, M, $, spaces),
 			// so String.length equals visible character width — safe to use directly.
-			const availableForTask = width - fixed - usageStr.length - 2;
+			const availableForTask = width - fixed - usageStr.length - 2 - (ctxReserve - ctxStr.length);
 			const rawTask = (state.status === "working" && state.streaming)
 				? state.streaming
 				: (state.task ?? "");
@@ -941,8 +964,29 @@ export default function (pi: ExtensionAPI) {
 
 		// Start idle reaper (replaces any reaper from a prior session)
 		if (reaperInterval) clearInterval(reaperInterval);
-		reaperInterval = setInterval(() => {
+		reaperInterval = setInterval(async () => {
 			reapIdleClients();
+
+			// Piggyback: refresh context usage for all working members.
+			let anyUpdated = false;
+			for (const [key, entry] of liveMembers) {
+				const sepIdx = key.indexOf("::");
+				const name = sepIdx >= 0 ? key.slice(sepIdx + 2) : key;
+				const state = memberState.get(name);
+				if (state?.status !== "working") continue;
+				try {
+					const stats = await entry.client.getSessionStats();
+					const pct = stats.contextUsage?.percent ?? null;
+					const current = memberState.get(name);
+					if (current) {
+						memberState.set(name, { ...current, contextPct: pct });
+						anyUpdated = true;
+					}
+				} catch {
+					// Non-fatal — leave contextPct at last known value
+				}
+			}
+			if (anyUpdated && lastCtx) updateWidget(lastCtx);
 		}, 60_000);
 
 		await ensureBeadsInit(ctx.cwd, (msg, level) => ctx.ui.notify(msg, level));
