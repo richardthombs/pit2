@@ -74,7 +74,17 @@ if (event.type === "message_end" && event.message.role === "assistant") {
 
 `contextUsage.percent` plumbing: works correctly — `getContextUsage()` (agent-session.js:2378) computes `estimateContextTokens(this.messages).tokens / contextWindow * 100`. Returns `undefined` only if `this.model` unset or `contextWindow <= 0`. Returns `{ tokens: null, percent: null }` only right after compaction fires before the next assistant turn.
 
-## `ctx:XX%` widget display — the reaper gap
+## `ctx:XX%` widget display — the real bug (contextPct clobbered)
+
+`runTaskWithStreaming()` correctly calls `getSessionStats()` post-task and writes `contextPct` into `memberState` via spread. But every caller then does a destructive `memberState.set(name, { status, task })` — a fresh object with no `contextPct` — which overwrites what `runTaskWithStreaming` just set. This happens at all 9 completion sites (lines ~1621, 1633, 1666, 1678, 1717, 1724, 1732, 1806, 1820, 1931, 1945). `updateWidget()` is called after the clobber, so the widget always sees `contextPct: undefined`.
+
+**Fix**: either (a) at each `memberState.set` completion site, read back `prev?.contextPct` and include it, or (b) introduce a `setMemberStatus(name, patch)` helper that does `{ ...prev, ...patch }` — cleaner and prevents future regressions.
+
+`buildWidgetLines` renders `contextPct` correctly: `typeof state.contextPct === "number"` guards it — `null` and `undefined` produce empty string, any number (even 0 or 3) renders as `ctx:X%`.
+
+`getContextUsage()` on the subagent server returns a real numeric `percent` for normal tasks (non-compacted, non-aborted). Only returns `{ percent: null }` if last assistant was aborted/error or right after compaction before next turn.
+
+## `ctx:XX%` widget display — the reaper gap (secondary issue)
 
 The 50% threshold was **removed** — `buildWidgetLines()` now shows `ctx:XX%` whenever `contextPct` is a non-null number:
 ```ts

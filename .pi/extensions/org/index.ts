@@ -191,6 +191,11 @@ function memberMemoryPath(cwd: string, memberName: string): string {
 	return path.join(cwd, '.pi', 'memory', `${id}.md`);
 }
 
+function setMemberStatus(name: string, patch: Partial<MemberState>): void {
+	const prev = memberState.get(name) ?? { status: "idle" as MemberStatus };
+	memberState.set(name, { ...prev, ...patch });
+}
+
 // ─── Subagent persistent clients ────────────────────────────────────────────
 
 /** Timeout for a single task's `waitForIdle()` call (10 minutes). */
@@ -1618,7 +1623,7 @@ export default function (pi: ExtensionAPI) {
 				runTaskWithStreaming(r.config, r.member.name, params.task, params.cwd ?? ctx.cwd, signal)
 					.then(result => {
 						const status = result.exitCode === 0 ? "done" : "error";
-						memberState.set(r.member.name, { status, task: params.task });
+						setMemberStatus(r.member.name, { status, task: params.task });
 						accumulateUsage(r.member.name, result.usage);
 						if (result.exitCode === 0) {
 							scheduleDoneReset(r.member.name);
@@ -1630,7 +1635,7 @@ export default function (pi: ExtensionAPI) {
 						deliverResult(r.member.name, r.config.name, content);
 					})
 					.catch(err => {
-						memberState.set(r.member.name, { status: "error", task: params.task });
+						setMemberStatus(r.member.name, { status: "error", task: params.task });
 						updateWidget(lastCtx);
 						deliverResult(r.member.name, r.config.name, `Task threw unexpectedly: ${err?.message ?? err}`);
 					});
@@ -1663,7 +1668,7 @@ export default function (pi: ExtensionAPI) {
 					runTaskWithStreaming(r.config, r.member.name, t.task, t.cwd ?? ctx.cwd, signal)
 						.then(result => {
 							const status = result.exitCode === 0 ? "done" : "error";
-							memberState.set(r.member.name, { status, task: t.task });
+							setMemberStatus(r.member.name, { status, task: t.task });
 							accumulateUsage(r.member.name, result.usage);
 							if (result.exitCode === 0) {
 								scheduleDoneReset(r.member.name);
@@ -1675,7 +1680,7 @@ export default function (pi: ExtensionAPI) {
 							deliverResult(r.member.name, r.config.name, content);
 						})
 						.catch(err => {
-							memberState.set(r.member.name, { status: "error", task: t.task });
+							setMemberStatus(r.member.name, { status: "error", task: t.task });
 							updateWidget(lastCtx);
 							deliverResult(r.member.name, r.config.name, `Task threw unexpectedly: ${err?.message ?? err}`);
 						});
@@ -1714,14 +1719,14 @@ export default function (pi: ExtensionAPI) {
 						try {
 							result = await runTaskWithStreaming(r.config, r.member.name, task, step.cwd ?? ctx.cwd, signal);
 						} catch (err: any) {
-							memberState.set(r.member.name, { status: "error", task });
+							setMemberStatus(r.member.name, { status: "error", task });
 							updateWidget(lastCtx);
 							deliverResult("Chain", "error", `Step ${i + 1} (${r.member.name}) threw: ${err?.message ?? err}`);
 							return;
 						}
 
 						if (result.exitCode !== 0) {
-							memberState.set(r.member.name, { status: "error", task });
+							setMemberStatus(r.member.name, { status: "error", task });
 							updateWidget(lastCtx);
 							deliverResult("Chain", "error",
 								`Chain stopped at step ${i + 1} (${r.member.name}):\n${result.output || result.stderr || "(no output)"}`
@@ -1729,7 +1734,7 @@ export default function (pi: ExtensionAPI) {
 							return;
 						}
 
-						memberState.set(r.member.name, { status: "done", task });
+						setMemberStatus(r.member.name, { status: "done", task });
 						accumulateUsage(r.member.name, result.usage);
 						scheduleDoneReset(r.member.name);
 						updateWidget(lastCtx);
@@ -1817,7 +1822,7 @@ export default function (pi: ExtensionAPI) {
 						};
 					}
 
-					memberState.set(r.member.name, { status: "done", task });
+					setMemberStatus(r.member.name, { status: "done", task });
 					scheduleDoneReset(r.member.name);
 					accumulateUsage(r.member.name, result.usage);
 					updateWidget(ctx);
@@ -1928,7 +1933,7 @@ export default function (pi: ExtensionAPI) {
 				);
 
 				if (result.exitCode !== 0) {
-					memberState.set(r.member.name, { status: "error", task: params.task });
+					setMemberStatus(r.member.name, { status: "error", task: params.task });
 					updateWidget(ctx);
 					return {
 						content: [
@@ -1942,7 +1947,7 @@ export default function (pi: ExtensionAPI) {
 					};
 				}
 
-				memberState.set(r.member.name, { status: "done", task: params.task });
+				setMemberStatus(r.member.name, { status: "done", task: params.task });
 				scheduleDoneReset(r.member.name);
 				accumulateUsage(r.member.name, result.usage);
 				updateWidget(ctx);
