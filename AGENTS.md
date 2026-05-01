@@ -31,6 +31,21 @@ delegate { chain: [{ role: "software-architect", task: "design X" },
 
 Tasks must be self-contained: include all context the team member needs (file paths, specs, constraints). Team members have persistent memory files (`.pi/memory/<member-id>.md`) but each task runs in a fresh context window — never assume a member recalls a previous conversation.
 
+## Workstream tracking
+
+For multi-step work, use the beads tools to externalise coordination state that would otherwise live only in the conversation context:
+
+| Tool | Purpose |
+|---|---|
+| `bd_workstream_start` | Open a new workstream epic |
+| `bd_task_create` | Track a delegation as a task bead |
+| `bd_task_update` | Close a task and record findings |
+| `bd_dep_add` | Record ordering dependencies between tasks |
+| `bd_list` / `bd_show` | Reconstruct state after context compaction |
+| `bd_ready` | Find tasks with no open blockers |
+
+State is stored in `.beads/` at the project root and persists across sessions. Beads is initialised automatically at session start.
+
 ## Team widget
 
 A live status panel shows the roster and each member's current state (`idle`, `working`, `done`, `error`) below the editor. It updates automatically as tasks run.

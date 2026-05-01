@@ -19,6 +19,7 @@ Members have no shared state and cannot communicate with each other. All coordin
 |---|---|
 | `AGENTS.md` | User guide — loaded into every LLM context window; keep concise |
 | `.pi/SYSTEM.md` | Engineering Manager system prompt |
+| `.beads/` | Beads workstream tracker data — created automatically at session start; do not edit by hand |
 | `.pi/roster.json` | Team roster: members, roles, hire dates, used name pool |
 | `.pi/agents/*.md` | Role definitions — YAML frontmatter + agent system prompt |
 | `.pi/extensions/org/index.ts` | Core extension: delegate tool, hire/fire/team/roles commands |

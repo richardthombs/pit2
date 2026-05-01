@@ -8,7 +8,13 @@
 - `.pi/prompts/memory.md` — Memory injection template (uses [name] and [path] substitutions)
 - `.pi/memory/<member-id>.md` — Per-member memory files (member ID = name lowercased, spaces → hyphens)
 
-## Per-Member Memory System
+## Beads Integration (workstream persistence)
+
+- Seven `bd_*` tools registered in `index.ts` around line 1122
+- Auto-init via `bd init --stealth` at session start; `beadsReady` map tracks readiness per cwd
+- `.beads/` directory lives at project root (runtime artifact, not source)
+- Documented in: `docs/features.md` (full spec), `AGENTS.md` (concise table), `README.md` (key files row)
+- Guidance to EM on when/how to use lives in `.pi/SYSTEM.md` "Workstream State (Beads)" section
 
 - Memory is per-MEMBER, not per-role; injected unconditionally for ALL members
 - Template from `.pi/prompts/memory.md`; content appended to system prompt after template block

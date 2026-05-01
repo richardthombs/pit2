@@ -338,6 +338,42 @@ The agent's effective context is therefore: its role definition prompt (from `.p
 
 ---
 
+## Workstream persistence (Beads)
+
+**What it does:** Gives the Engineering Manager a persistent workstream tracker for multi-step efforts that span multiple delegations or sessions. State is stored in a `.beads/` directory at the project root and survives context compaction and session restarts.
+
+**Initialisation:** Beads is initialised automatically at session start via `bd init --stealth`. If `.beads/` already exists it is left untouched. If the `bd` CLI is unavailable, the tools fail gracefully with a clear error rather than crashing the session.
+
+### Tools
+
+| Tool | What it does |
+|---|---|
+| `bd_workstream_start` | Creates a beads *epic* to represent a workstream. Returns the epic ID for use when attaching tasks. |
+| `bd_task_create` | Creates a task bead, optionally attached to an epic via `epic_id`. Returns the task ID. |
+| `bd_task_update` | Updates a task's `status`, `notes`, or `design`. Use `status: "closed"` to close a completed task. |
+| `bd_dep_add` | Records a `blocks` dependency between two tasks — equivalent to chain ordering, but explicit and persistent. |
+| `bd_list` | Lists tasks, optionally filtered by status or assignee. Defaults to open/in-progress to reduce noise. |
+| `bd_show` | Shows full detail for a single task or epic: design rationale, notes, dependencies, and status. |
+| `bd_ready` | Lists tasks with no open blockers — i.e., work that is safe to delegate next. |
+
+### When to use
+
+Beads is for **EM coordination state** — tracking delegations within multi-step workstreams, recording what was found, and reconstructing context after compaction. Create an epic when you assign a workstream label; create task beads for each tracked delegation; update on completion; use `bd_list`, `bd_show`, and `bd_ready` to reconstruct state.
+
+**Do not create beads for:**
+- Single-delegation tasks with no follow-on work
+- Work that obviously completes in the current session and will not be queried later
+- Sub-steps internal to a subagent's own work
+
+### Design vs Notes fields
+
+- **`design`** — set at creation. Records *why*: rationale, decisions, constraints. For future sessions that need to understand intent.
+- **`notes`** — set on update. Records *what happened*: findings, artefacts produced, caveats. Write for future-you after compaction; two to five sentences is enough.
+
+**Out of scope:** Beads tracks EM-level coordination only. Subagents do not interact with beads directly. There is no built-in visualisation — use `bd_list` and `bd_show` to inspect state.
+
+---
+
 ## Name pool
 
 The system maintains a fixed pool of 30 gender-neutral names used for automatic assignment when hiring. Key properties:
