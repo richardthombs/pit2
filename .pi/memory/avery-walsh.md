@@ -7,6 +7,6 @@
 
 ## Branch notes
 - `beads-integration`: active workstream branch; Integration A implemented; Integration B full design doc committed (`design-beads-integration-b.md`); Integrations C–D remain as earlier design docs in `.pi/docs/`
-- Last commit on branch: `586d986` — chore(memory): update agent memory files after broker auto-start work
-- Roster as of 2026-05-02: Finley Park fired, Blaine Mwangi fired; Sage Okonkwo onboarded (typescript-engineer); Alex Rivera removed, Kendall Mbeki onboarded (software-architect)
+- Last commit on branch: `dc89399` — feat(org-extension): add blocked_by param to bd_task_create; update bd_dep_add description
+- Roster as of 2026-05-02: Finley Park fired, Blaine Mwangi fired; Sage Okonkwo onboarded (typescript-engineer); Alex Rivera removed, Kendall Mbeki onboarded (software-architect); Emery Vidal onboarded (software-architect); Blake O'Brien onboarded (qa-engineer)
 - Casey Kim removed 2026-05-01; replaced by Remy Osei
