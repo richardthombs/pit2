@@ -29,7 +29,10 @@
 - All 7 tools registered between `fire` tool and `delegate` tool
 - `bd dep add` arg order: `["dep", "add", blocked_id, blocker_id]` (blocked first)
 - `bd close` + `bd update` responses are arrays — parsed with `[0]`; `bd create` is a single object
+- `bd close` flag is `--reason` (not `--close-reason`); `--close-reason` is an unknown flag and will error
 - `bd_list` uses `--limit=0` (avoids 50-item default cap) and `--status=open,in_progress` default
+- `bd create --deps=id1,id2` (bare IDs, no type prefix) defaults to `dependency_type: "blocks"` — the listed IDs block the newly created task (correct direction for a `blocked_by` parameter). Verified by live test.
+- `bd_task_create` now has `blocked_by: Type.Optional(Type.Array(Type.String()))` → `--deps=${params.blocked_by.join(',')}` when provided and non-empty; `bd_dep_add` description updated to steer agents toward `blocked_by` for fan-in creation
 - Known open: `beads.role` not set after init → stderr warning on every `bd` call (non-blocking, cosmetic)
 - Known open: `design` param silently dropped when `status === "closed"` in `bd_task_update`
 
@@ -80,6 +83,14 @@
 - Confirmed broken via pit2-qob: Alex Rivera (pit2-qob.1) and Remy Osei (pit2-qob.4) returned memory-update paragraphs instead of their ocean word
 - Fix: two-phase execution approach
 - Verified fixed via pit2-1kb: all four upstream tasks (.1–.4) returned clean single-word `close_reason` values; no prose contamination in any deliverable
+- **Residual gap A (pit2-3jx):** two-phase fix guards against agent's own memory-update prose, but NOT against upstream task output appearing at the top of the assistant response window. In pit2-3jx.3, notes opened with `**Persistent**` (matching .1's output) before the agent's own "cleansing" answer; `close_reason` captured the contaminated prefix. Root cause: prior task output bleeding into the agent's context/response, not the agent's own memory phase.
+- **Residual gap B (pit2-52r — parallel stress):** under 25-task parallel load, broker dispatched multiple tasks to the same member sequentially; prior task's result remained in the context window. In pit2-52r.3, agent produced cross-agent commentary as its phase-1 first message — captured verbatim as `close_reason`. Two-phase fix cannot help when phase-1 itself is contaminated by prior task context. Confirmed again in pit2-52r.17: notes showed three injections of "Profound" (from .16 context), but close_reason was correctly captured as "Ineffable" — two-phase capture held despite note contamination.
+- **Residual gap C (pit2-52r — double/triple dispatch):** pit2-52r.1 notes contained two stacked responses (double dispatch); pit2-52r.17 (Sam Chen / pi-specialist) contained three stacked responses (triple dispatch) on the same stress run. Pattern: dispatches 2+ append to notes but bead close race means only the Nth-to-close dispatch sets `close_reason`. Delivered word was clean in both cases but capacity waste is significant and worsening.
+- **Residual gap D (pit2-52r.11 — error-recovery overwrite):** broker's `bd close` race condition triggered error notification; EM dispatched a recovery/investigation task reusing the *same bead ID*; `captureResult` for the investigation run overwrote `close_reason: "Majestic."` with investigative prose. Correct deliverable only recoverable from embedded notes text. Root cause: reuse of same bead for recovery tasks + unconditional close_reason write in `captureResult`. Fix directions: (a) don't reuse closed bead for recovery tasks, or (b) guard `captureResult` against overwriting an already-valid close_reason.
+- **File-offload path verified (pit2-52r.14):** result written to `.pi/task-results/<bead-id>.md`, notes = `[Full output written to file — see metadata.result_file]`, metadata.result_file set correctly. Works under parallel stress load. ✓
+
+### beads CLI flag gotcha
+- `bd close` reason flag is `-r` / `--reason`, NOT `--close-reason` (returns "unknown flag" error)
 
 ### Known Open Items (non-blocking)
 - `fmtTokens` imported in `index.ts` but never used — dead import, should be cleaned up

@@ -35,6 +35,11 @@
 - When one edit in a batch fails, the ENTIRE batch is rolled back — no partial applies
 - Always verify the patterns match before mixing many independent edits in one call
 
+### `bd_task_create` tool — `blocked_by` parameter (added 2026-05-02)
+- `blocked_by: Type.Optional(Type.Array(Type.String(), ...))` added to schema
+- Maps to `--deps=<comma-separated IDs>` on `bd create` — bare IDs mean "new task is blocked by these"
+- `bd_dep_add` description updated: now clarifies it's for already-created tasks; `blocked_by` is preferred for fan-in creation
+
 ### Key API facts
 - `RpcClient` is imported from `@mariozechner/pi-coding-agent`
 - `client.getSessionStats()` returns an object with `contextUsage?.percent` (number | undefined)

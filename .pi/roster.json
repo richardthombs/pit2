@@ -53,6 +53,18 @@
       "name": "Kendall Mbeki",
       "role": "software-architect",
       "hiredAt": "2026-05-02T08:17:36.471Z"
+    },
+    {
+      "id": "emery-vidal",
+      "name": "Emery Vidal",
+      "role": "software-architect",
+      "hiredAt": "2026-05-02T09:11:18.909Z"
+    },
+    {
+      "id": "blake-obrien",
+      "name": "Blake O'Brien",
+      "role": "qa-engineer",
+      "hiredAt": "2026-05-02T09:12:29.239Z"
     }
   ],
   "usedNames": [
@@ -73,6 +85,8 @@
     "Remy Osei",
     "Blaine Mwangi",
     "Sage Okonkwo",
-    "Kendall Mbeki"
+    "Kendall Mbeki",
+    "Emery Vidal",
+    "Blake O'Brien"
   ]
 }

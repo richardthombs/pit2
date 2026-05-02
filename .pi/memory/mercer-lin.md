@@ -2,7 +2,7 @@
 
 ## Beads Repository
 
-- Source: https://github.com/gastownhall/beads (latest commit `8694c53589f1`, 2026-04-30)
+- Source: https://github.com/gastownhall/beads (latest commit `0fa5f210f41af9f03b1888480ce5c7ec97c03eb4`, 2026-05-02)
 - Skill files (canonical agent docs): `claude-plugin/skills/beads/` in the repo; fetch via raw.githubusercontent.com
 - Most important resource files: SKILL.md, DEPENDENCIES.md, WORKFLOWS.md, MOLECULES.md, AGENTS.md, ASYNC_GATES.md, BOUNDARIES.md, RESUMABILITY.md, INTEGRATION_PATTERNS.md
 - `bd prime` auto-generates a live context summary; canonical source of truth per ADR-0001
@@ -60,13 +60,22 @@
 - `--status open --status in_progress` ❌ returns empty array
 
 ### Other Flags Confirmed
-- `bd create`: `--type`, `--parent` (not `--epic-id`), `--design`, `--notes`, `--json`
+- `bd create`: `--type`, `--parent` (not `--epic-id`), `--design`, `--notes`, `--json`, `--deps`
 - `bd update`: `--append-notes` exists (appends vs `--notes` which replaces)
 - `bd init`: requires `--non-interactive` in non-TTY (execFile) context
 - `bd create --type`: accepts `epic|task|bug|feature|chore|decision`; default `task`
 - `bd dep add --type`: default is `blocks` (redundant to specify but harmless)
 - `bd list` default limit: 50 — use `--limit=0` for all results
 - `bd ready --type=task` filters out epics (which otherwise appear in ready output)
+
+### `bd create --deps` — Inline Dependency Creation (Verified Against create.go)
+- Flag: `--deps="A,B,C"` (comma-separated, bare IDs or `type:id` format)
+- **Bare ID** (no colon): new task IS BLOCKED BY the listed ID — correct for fan-in pattern
+- **`blocks:X`** (explicit with colon): SWAPS direction — new task BLOCKS X (counterintuitive, don't use for fan-in)
+- **`discovered-from:X`**, **`related:X`**: work as expected (no swap)
+- **Atomicity in embedded mode**: `CreateIssue` writes to Dolt working set (no commit); deps also written to working set; single `store.Commit()` at end — issue + deps committed together, zero `bd ready` race window
+- **Atomicity in server mode**: `CreateIssue` commits internally first, then deps added — race window EXISTS (not relevant for pit2 today)
+- `--graph <file.json>`: batch-creates a whole issue graph atomically from JSON — alternative for multi-issue fanout materialisation
 
 ### Bugs Found in spec-beads-integration-a.md §3.6 (Alex Rivera)
 - Tool 4 `bd_dep_add`: blocker/blocked IDs in wrong order in the `runBd` call

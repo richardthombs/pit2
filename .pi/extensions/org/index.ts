@@ -1263,6 +1263,9 @@ export default function (pi: ExtensionAPI) {
 					"If provided and the broker is active, the broker will auto-dispatch to an available member with this role when the task becomes ready. " +
 					"Must match an agent slug in .pi/agents/. Use only one label per task.",
 			})),
+			blocked_by: Type.Optional(Type.Array(Type.String(), {
+				description: "Task IDs that must complete before this task becomes ready.",
+			})),
 		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			const guard = beadsGuard(ctx.cwd);
@@ -1273,6 +1276,7 @@ export default function (pi: ExtensionAPI) {
 			if (params.epic_id) args.push(`--parent=${params.epic_id}`);
 			if (params.design)  args.push(`--design=${params.design}`);
 			if (params.role)    args.push(`--label=${params.role}`);
+			if (params.blocked_by?.length) args.push(`--deps=${params.blocked_by.join(',')}`);
 
 			try {
 				const { stdout } = await runBd(ctx.cwd, args);
@@ -1359,7 +1363,7 @@ export default function (pi: ExtensionAPI) {
 		name: "bd_dep_add",
 		label: "Dep Add",
 		description:
-			"Record that one task blocks another (i.e. blocked_id cannot start until blocker_id is done). Use this to encode chain step ordering and parallel-merge gates.",
+			"Record that one task blocks another (i.e. blocked_id cannot start until blocker_id is done). Use this to add dependencies between already-created tasks. For fan-in creation, prefer bd_task_create with the blocked_by parameter instead.",
 		promptSnippet: "Add a blocks dependency between tasks",
 		parameters: Type.Object({
 			blocker_id: Type.String({
