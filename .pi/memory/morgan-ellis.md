@@ -56,11 +56,17 @@
 - `RunTaskFn` in broker.ts is 4-arg only — no signal/onProgress; broker-dispatched tasks cannot be cancelled via abort signal (pre-existing limitation)
 - `SYSTEM.md` EM identity is `.pi/SYSTEM.md` (not `.pi/agents/SYSTEM.md`)
 
-### BLOCKING gap identified in broker-only dispatch review
-- SYSTEM.md now tells EM to populate `description` as the primary task brief ("Always populate this when creating a task"), but `bd_task_create` has NO `description` parameter — only title, epic_id, design, role
-- `_runAndClose` brief template mentions "title, design, acceptance criteria" but NOT description
-- Agents fetching task via `bd show` will find `description` empty/absent if EM follows SYSTEM.md guidance
-- Fix needed: add `description` param to `bd_task_create` mapping to `--description=VALUE` in bd CLI
+### description field gap — FIXED
+- `bd_task_create` now has `description: Type.Optional(...)` param → `--description=${params.description}` when provided
+- `_runAndClose` brief template now says "title, description, design, acceptance criteria" + "The description field contains the full task specification."
+
+### delegate tool removal (reviewed)
+- `delegate` tool, `DelegateParams`, `AssigneeFields`, `asyncMode`, `/async` command, and delegate-specific `deliverResult(memberName, roleName, content)` all removed
+- `setMemberStatus()` is now dead code (was only called by delegate async paths) — non-blocking
+- File header JSDoc comment still references `delegate` tool — cosmetic, non-blocking
+- `resolveOrScale`, all beads tools, all team mgmt commands/tools intact
+- `broker.configure()` call site clean — no references to removed items
+- No new TS errors (all errors are pre-existing TS2307 module resolution + TS7006 implicit any)
 
 ### Context Usage Polling
 - `runTaskWithStreaming` captures `contextPct` post-task via `entry.client.getSessionStats()`

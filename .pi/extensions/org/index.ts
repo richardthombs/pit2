@@ -1,8 +1,9 @@
 /**
  * Engineering Organisation Extension
  *
- * Provides a team roster and a `delegate` tool so the engineering manager
- * (the top-level pi session) can dispatch work to specialised team members.
+ * Provides a team roster and dispatches work to specialised team members via
+ * the beads broker. The engineering manager creates task beads; the broker
+ * picks them up and routes them to available members by role.
  *
  * Each team member maps to a role definition in `.pi/agents/<role>.md`.
  * Each team member runs as a persistent RpcClient subprocess, reused across tasks.
@@ -12,9 +13,6 @@
  *   /hire    — hire a team member for a role
  *   /fire    — remove a team member
  *   /roles   — list available roles
- *
- * Tool:
- *   delegate — single / parallel / chain delegation modes
  */
 
 import { type ChildProcess, execFile as execFileCb } from "node:child_process";
@@ -697,60 +695,6 @@ function extractStreamSnippet(ev: StreamEvent): string {
 	return "";
 }
 
-// ─── Tool parameter schemas ───────────────────────────────────────────────────
-
-const AssigneeFields = {
-	member: Type.Optional(
-		Type.String({
-			description: "Team member's full name (e.g. 'Casey Kim'). Use /team to see the roster.",
-		}),
-	),
-	role: Type.Optional(
-		Type.String({
-			description:
-				"Role name (e.g. 'typescript-engineer'). Delegates to the first team member with that role. Use /roles to see available roles.",
-		}),
-	),
-	task: Type.String({
-		description:
-			"The task to delegate. Be self-contained — include all context the team member needs (relevant files, specs, constraints).",
-	}),
-	cwd: Type.Optional(Type.String({ description: "Override working directory for this task." })),
-};
-
-const DelegateParams = Type.Object({
-	// Single mode
-	member: Type.Optional(AssigneeFields.member),
-	role: Type.Optional(AssigneeFields.role),
-	task: Type.Optional(AssigneeFields.task),
-	cwd: Type.Optional(AssigneeFields.cwd),
-	// Parallel mode
-	tasks: Type.Optional(
-		Type.Array(Type.Object(AssigneeFields), {
-			description: "Run multiple tasks in parallel. Max 8.",
-		}),
-	),
-	// Async mode
-	async: Type.Optional(Type.Boolean({
-		description: "If true, start tasks in background and return immediately. Results are delivered into the conversation when each task completes. Default: false (blocking).",
-	})),
-	// Chain mode
-	chain: Type.Optional(
-		Type.Array(
-			Type.Object({
-				...AssigneeFields,
-				task: Type.String({
-					description:
-						"Task for this step. Use {previous} to reference the previous step's output.",
-				}),
-			}),
-			{
-				description: "Run tasks sequentially; each step can reference {previous}.",
-			},
-		),
-	),
-});
-
 // ─── Team state & widget ─────────────────────────────────────────────────────
 
 type MemberStatus = "idle" | "working" | "done" | "error";
@@ -764,7 +708,6 @@ interface MemberState {
 // ─── Extension ────────────────────────────────────────────────────────────────
 
 export default function (pi: ExtensionAPI) {
-	let asyncMode = true;
 	const memberState = new Map<string, MemberState>();
 	const memberUsage = new Map<string, UsageStats>();
 	const memberTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -856,7 +799,7 @@ export default function (pi: ExtensionAPI) {
 
 	function buildWidgetLines(cwd: string, width: number = 120): string[] {
 		const roster = loadRoster(cwd);
-		const lines: string[] = [`  Engineering Manager  (async: ${asyncMode ? "on" : "off"})`];
+		const lines: string[] = [`  Engineering Manager`];
 
 		if (roster.members.length === 0) {
 			lines.push("  └─ (no team members — use /hire <role>)");
@@ -909,11 +852,6 @@ export default function (pi: ExtensionAPI) {
 
 	let rosterWatcher: fs.FSWatcher | null = null;
 
-	function setMemberStatus(name: string, patch: Partial<MemberState>): void {
-		const prev = memberState.get(name) ?? { status: "idle" as MemberStatus };
-		memberState.set(name, { ...prev, ...patch });
-	}
-
 	function scheduleDoneReset(memberName: string): void {
 		const existing = memberTimers.get(memberName);
 		if (existing) clearTimeout(existing);
@@ -926,11 +864,6 @@ export default function (pi: ExtensionAPI) {
 			memberTimers.delete(memberName);
 		}, 5 * 60 * 1000);
 		memberTimers.set(memberName, timer);
-	}
-
-	function deliverResult(memberName: string, roleName: string, content: string): void {
-		const header = `Background task completed — **${memberName}** (${roleName}):\n\n`;
-		pi.sendUserMessage(header + content, { deliverAs: "followUp" });
 	}
 
 	function updateWidget(ctx: any): void {
@@ -954,7 +887,6 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_start", async (event, ctx) => {
 		if (event.reason !== "startup" && event.reason !== "resume" && event.reason !== "reload") return;
 		// Reset all state to idle on (re)start
-		asyncMode = true;
 		memberState.clear();
 		memberUsage.clear();
 		memberTimers.clear();
@@ -1111,24 +1043,6 @@ export default function (pi: ExtensionAPI) {
 				"success",
 			);
 			updateWidget(ctx);
-		},
-	});
-
-	// ── /async ────────────────────────────────────────────────────────────────
-
-	pi.registerCommand("async", {
-		description: "Toggle async delegation on/off. When on, delegate returns immediately and delivers results as follow-up messages.",
-		handler: async (args, ctx) => {
-			const arg = args.trim().toLowerCase();
-			if (arg === "on") asyncMode = true;
-			else if (arg === "off") asyncMode = false;
-			else if (arg === "") asyncMode = !asyncMode;
-			else {
-				ctx.ui.notify("Usage: /async [on|off]", "info");
-				return;
-			}
-			updateWidget(ctx);
-			ctx.ui.notify(`Async delegation: ${asyncMode ? "on" : "off"}`, "info");
 		},
 	});
 
@@ -1608,384 +1522,5 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
-	// ── delegate tool ──────────────────────────────────────────────────────────
-
-	pi.registerTool({
-		name: "delegate",
-		label: "Delegate",
-		description: [
-			"Delegate tasks to team members.",
-			"Single: { member, task } or { role, task }.",
-			"Parallel: { tasks: [{member|role, task}] } — up to 8 concurrent.",
-			"Chain: { chain: [{member|role, task}] } — sequential, supports {previous} placeholder.",
-			"Use /team to see the roster and /roles to see available roles.",
-			"Add async: true to fire in background and return immediately — results are delivered into the conversation when complete.",
-		].join(" "),
-		parameters: DelegateParams,
-
-		async execute(_toolCallId, params, signal, onUpdate, ctx) {
-			// ── Async: single mode ──────────────────────────────────────────
-			if ((params.async ?? asyncMode) && params.task) {
-				const r = await resolveOrScale(ctx.cwd, memberState, params.member, params.role);
-				if ("error" in r) {
-					return { content: [{ type: "text", text: r.error }], details: {}, isError: true };
-				}
-				const hiredNote = r.hired ? `Auto-hired ${r.member.name} (${r.config.name}) — ` : "";
-				memberState.set(r.member.name, { status: "working", task: params.task });
-				updateWidget(ctx);
-
-				runTaskWithStreaming(r.config, r.member.name, params.task, params.cwd ?? ctx.cwd, signal)
-					.then(result => {
-						const status = result.exitCode === 0 ? "done" : "error";
-						setMemberStatus(r.member.name, { status, task: params.task });
-						accumulateUsage(r.member.name, result.usage);
-						if (result.exitCode === 0) {
-							scheduleDoneReset(r.member.name);
-						}
-						updateWidget(lastCtx);
-						const content = result.exitCode === 0
-							? result.output
-							: `Error:\n${result.output || result.stderr || "(no output)"}`;
-						deliverResult(r.member.name, r.config.name, content);
-					})
-					.catch(err => {
-						setMemberStatus(r.member.name, { status: "error", task: params.task });
-						updateWidget(lastCtx);
-						deliverResult(r.member.name, r.config.name, `Task threw unexpectedly: ${err?.message ?? err}`);
-					});
-
-				return {
-					content: [{ type: "text", text: `${hiredNote}Task started in background — ${r.member.name} is working.` }],
-					details: {},
-				};
-			}
-
-			// ── Async: parallel mode ──────────────────────────────────────────
-			if ((params.async ?? asyncMode) && params.tasks?.length) {
-				if (params.tasks.length > 8) {
-					return { content: [{ type: "text", text: "Maximum 8 parallel tasks." }], details: {}, isError: true };
-				}
-
-				let started = 0;
-				const ackLines: string[] = [];
-				for (const [i, t] of params.tasks.entries()) {
-					const r = await resolveOrScale(ctx.cwd, memberState, t.member, t.role);
-					if ("error" in r) {
-						deliverResult(t.member ?? t.role ?? `task ${i + 1}`, "unknown", `Could not start: ${r.error}`);
-						continue;
-					}
-					const hiredNote = r.hired ? `Auto-hired ${r.member.name} (${r.config.name}) — ` : "";
-					memberState.set(r.member.name, { status: "working", task: t.task });
-					started++;
-					ackLines.push(`${hiredNote}${r.member.name} starting in background.`);
-
-					runTaskWithStreaming(r.config, r.member.name, t.task, t.cwd ?? ctx.cwd, signal)
-						.then(result => {
-							const status = result.exitCode === 0 ? "done" : "error";
-							setMemberStatus(r.member.name, { status, task: t.task });
-							accumulateUsage(r.member.name, result.usage);
-							if (result.exitCode === 0) {
-								scheduleDoneReset(r.member.name);
-							}
-							updateWidget(lastCtx);
-							const content = result.exitCode === 0
-								? result.output
-								: `Error:\n${result.output || result.stderr || "(no output)"}`;
-							deliverResult(r.member.name, r.config.name, content);
-						})
-						.catch(err => {
-							setMemberStatus(r.member.name, { status: "error", task: t.task });
-							updateWidget(lastCtx);
-							deliverResult(r.member.name, r.config.name, `Task threw unexpectedly: ${err?.message ?? err}`);
-						});
-				}
-
-				updateWidget(ctx);
-				return {
-					content: [{ type: "text", text: ackLines.join("\n") || `${started} task(s) started in background.` }],
-					details: {},
-				};
-			}
-
-			// ── Async: chain mode ─────────────────────────────────────────────
-			if ((params.async ?? asyncMode) && params.chain?.length) {
-				const chainLength = params.chain.length;
-
-				(async () => {
-					let previous = "";
-					const sections: string[] = [];
-
-					for (let i = 0; i < chainLength; i++) {
-						const step = params.chain![i];
-						const r = await resolveOrScale(ctx.cwd, memberState, step.member, step.role);
-						if ("error" in r) {
-							deliverResult("Chain", "error", `Step ${i + 1} failed to resolve: ${r.error}`);
-							return;
-						}
-
-						const hiredNote = r.hired ? `Auto-hired ${r.member.name} (${r.config.name}) — ` : "";
-						const task = step.task.replace(/\{previous\}/g, previous);
-						memberState.set(r.member.name, { status: "working", task });
-						updateWidget(lastCtx);
-						pi.sendUserMessage(`${hiredNote}[chain ${i + 1}/${chainLength}] ${r.member.name} starting…`, { deliverAs: "followUp" });
-
-						let result: RunResult;
-						try {
-							result = await runTaskWithStreaming(r.config, r.member.name, task, step.cwd ?? ctx.cwd, signal);
-						} catch (err: any) {
-							setMemberStatus(r.member.name, { status: "error", task });
-							updateWidget(lastCtx);
-							deliverResult("Chain", "error", `Step ${i + 1} (${r.member.name}) threw: ${err?.message ?? err}`);
-							return;
-						}
-
-						if (result.exitCode !== 0) {
-							setMemberStatus(r.member.name, { status: "error", task });
-							updateWidget(lastCtx);
-							deliverResult("Chain", "error",
-								`Chain stopped at step ${i + 1} (${r.member.name}):\n${result.output || result.stderr || "(no output)"}`
-							);
-							return;
-						}
-
-						setMemberStatus(r.member.name, { status: "done", task });
-						accumulateUsage(r.member.name, result.usage);
-						scheduleDoneReset(r.member.name);
-						updateWidget(lastCtx);
-						previous = result.output;
-						sections.push(`## Step ${i + 1}: ${r.member.name} (${r.config.name})\n\n${result.output}`);
-					}
-
-					pi.sendUserMessage(
-						`Background chain completed (${chainLength} steps):\n\n${sections.join("\n\n---\n\n")}`,
-						{ deliverAs: "followUp" }
-					);
-				})().catch(err => {
-					pi.sendUserMessage(
-						`Background chain failed unexpectedly: ${err?.message ?? err}`,
-						{ deliverAs: "followUp" }
-					);
-				});
-
-				return {
-					content: [{ type: "text", text: `Chain of ${chainLength} steps started in background.` }],
-					details: {},
-				};
-			}
-
-			// ── Chain mode ────────────────────────────────────────────────────
-			if (params.chain?.length) {
-				const sections: string[] = [];
-				let previous = "";
-
-				for (let i = 0; i < params.chain.length; i++) {
-					const step = params.chain[i];
-					const r = await resolveOrScale(ctx.cwd, memberState, step.member, step.role);
-					if ("error" in r) {
-						return {
-							content: [{ type: "text", text: `Chain step ${i + 1} failed: ${r.error}` }],
-							details: {},
-							isError: true,
-						};
-					}
-
-					const hiredNote = r.hired ? `Auto-hired ${r.member.name} (${r.config.name}) — ` : "";
-					const task = step.task.replace(/\{previous\}/g, previous);
-					memberState.set(r.member.name, { status: "working", task });
-					updateWidget(ctx);
-					onUpdate?.({
-						content: [
-							{
-								type: "text",
-								text: `${hiredNote}[chain ${i + 1}/${params.chain.length}] ${r.member.name} working...`,
-							},
-						],
-						details: {},
-					});
-
-					const result = await runTaskWithStreaming(
-						r.config,
-						r.member.name,
-						task,
-						step.cwd ?? ctx.cwd,
-						signal,
-						(text) =>
-							onUpdate?.({
-								content: [
-									{
-										type: "text",
-										text: `[chain ${i + 1}] ${r.member.name}: ${text.slice(0, 200)}…`,
-									},
-								],
-								details: {},
-							}),
-					);
-
-					if (result.exitCode !== 0) {
-						memberState.set(r.member.name, { status: "error", task });
-						updateWidget(ctx);
-						return {
-							content: [
-								{
-									type: "text",
-									text: `Chain stopped at step ${i + 1} (${r.member.name}):\n${result.output || result.stderr || "(no output)"}`,
-								},
-							],
-							details: {},
-							isError: true,
-						};
-					}
-
-					setMemberStatus(r.member.name, { status: "done", task });
-					scheduleDoneReset(r.member.name);
-					accumulateUsage(r.member.name, result.usage);
-					updateWidget(ctx);
-					previous = result.output;
-					sections.push(
-						`## Step ${i + 1}: ${r.member.name} (${r.config.name})\n\n${result.output}`,
-					);
-				}
-
-				return {
-					content: [{ type: "text", text: sections.join("\n\n---\n\n") }],
-					details: {},
-				};
-			}
-
-			// ── Parallel mode ─────────────────────────────────────────────────
-			if (params.tasks?.length) {
-				if (params.tasks.length > 8) {
-					return {
-						content: [{ type: "text", text: "Maximum 8 parallel tasks." }],
-						details: {},
-						isError: true,
-					};
-				}
-
-				const results = await Promise.all(
-					params.tasks.map(async (t, i) => {
-						const r = await resolveOrScale(ctx.cwd, memberState, t.member, t.role);
-						if ("error" in r) {
-							return {
-								name: t.member ?? t.role ?? `task ${i + 1}`,
-								output: r.error,
-								exitCode: 1,
-							};
-						}
-						const hiredNote = r.hired ? `Auto-hired ${r.member.name} (${r.config.name}) — ` : "";
-						memberState.set(r.member.name, { status: "working", task: t.task });
-						updateWidget(ctx);
-						onUpdate?.({
-							content: [
-								{
-									type: "text",
-									text: `${hiredNote}[parallel ${i + 1}/${params.tasks!.length}] ${r.member.name} starting…`,
-								},
-							],
-							details: {},
-						});
-						const result = await runTaskWithStreaming(
-							r.config,
-							r.member.name,
-							t.task,
-							t.cwd ?? ctx.cwd,
-							signal,
-						);
-						memberState.set(r.member.name, {
-							status: result.exitCode === 0 ? "done" : "error",
-							task: t.task,
-						});
-						if (result.exitCode === 0) scheduleDoneReset(r.member.name);
-						accumulateUsage(r.member.name, result.usage);
-						updateWidget(ctx);
-						return { name: r.member.name, output: result.output, exitCode: result.exitCode };
-					}),
-				);
-
-				const succeeded = results.filter((r) => r.exitCode === 0).length;
-				const body = results
-					.map((r) => `## ${r.name} ${r.exitCode === 0 ? "✓" : "✗"}\n\n${r.output}`)
-					.join("\n\n---\n\n");
-
-				return {
-					content: [
-						{
-							type: "text",
-							text: `${succeeded}/${results.length} tasks succeeded\n\n${body}`,
-						},
-					],
-					details: {},
-				};
-			}
-
-			// ── Single mode ───────────────────────────────────────────────────
-			if (params.task) {
-				const r = await resolveOrScale(ctx.cwd, memberState, params.member, params.role);
-				if ("error" in r) {
-					return { content: [{ type: "text", text: r.error }], details: {}, isError: true };
-				}
-
-				const hiredNote = r.hired ? `Auto-hired ${r.member.name} (${r.config.name}) — ` : "";
-				memberState.set(r.member.name, { status: "working", task: params.task });
-				updateWidget(ctx);
-				onUpdate?.({
-					content: [{ type: "text", text: `${hiredNote}${r.member.name} starting task…` }],
-					details: {},
-				});
-
-				const result = await runTaskWithStreaming(
-					r.config,
-					r.member.name,
-					params.task,
-					params.cwd ?? ctx.cwd,
-					signal,
-					(text) =>
-						onUpdate?.({
-							content: [{ type: "text", text: `${r.member.name}: ${text.slice(0, 300)}…` }],
-							details: {},
-						}),
-				);
-
-				if (result.exitCode !== 0) {
-					setMemberStatus(r.member.name, { status: "error", task: params.task });
-					updateWidget(ctx);
-					return {
-						content: [
-							{
-								type: "text",
-								text: `${r.member.name} encountered an error:\n${result.output || result.stderr || "(no output)"}`,
-							},
-						],
-						details: {},
-						isError: true,
-					};
-				}
-
-				setMemberStatus(r.member.name, { status: "done", task: params.task });
-				scheduleDoneReset(r.member.name);
-				accumulateUsage(r.member.name, result.usage);
-				updateWidget(ctx);
-				return {
-					content: [
-						{
-							type: "text",
-							text: `**${r.member.name}** (${r.config.name}):\n\n${result.output}`,
-						},
-					],
-					details: {},
-				};
-			}
-
-			return {
-				content: [
-					{
-						type: "text",
-						text: "Specify task (single), tasks (parallel), or chain. Use /team to see the roster.",
-					},
-				],
-				details: {},
-				isError: true,
-			};
-		},
-	});
+	// (delegate tool removed — all dispatch goes through beads + broker)
 }

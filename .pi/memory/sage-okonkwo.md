@@ -15,7 +15,7 @@
 - **Three new callbacks in `configure()`** (added in spec §2/§3 pass): `deliverResult(taskId, taskTitle, role, memberName, output)`, `scheduleDoneReset(memberName)`, `accumulateMemberUsage(memberName, usage)`. All called inside `_enqueueWrite` after successful `captureResult`.
 - **`UsageStats` local type** added to broker.ts (mirrored pattern); `RunResult` now has `usage?: UsageStats`. The `if (result.usage)` guard before calling `accumulateMemberUsage` handles the optional field.
 - **`captureResult` error handling in section 4**: now uses try/catch — on error, calls `notifyEM` and returns early (does NOT call `deliverResult` or the other callbacks). Previously used `.catch()` wrapper.
-- **`delegate` tool NOT yet removed** — that is a separate step per the task scope.
+- **`delegate` tool removed** (spec §3 complete). Also removed: `asyncMode`, `AssigneeFields`, `DelegateParams`, `/async` command, `deliverResult` function. File truncated to 1533 lines.
 
 ### Patterns
 - `tsc --noEmit --strict --target ES2022 --module NodeNext --moduleResolution NodeNext --skipLibCheck <file>` works for quick TS validation without a tsconfig.
