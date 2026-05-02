@@ -30,4 +30,4 @@
 - `broker.configure()` is the injection point for all dependencies; constructor is empty.
 - `liveMembers` map in index.ts uses key `${cwd}::${memberName}` — eviction deletes by this key.
 - `_enqueueWrite` and `_enqueueMemoryPhase` are separate serialisation chains (per-cwd and per-role respectively).
-- File-offload path in `captureResult` has an inherent narrow-window duplicate-notes risk (multiple sequential writes before `capture_step=notes_written` is set) — known limitation, not a bug to chase.
+- `captureResult` is now: closed-guard → 60 KB size check (throws) → `bd update --append-notes` → `bd close --reason`. All file-offload and metadata complexity removed (pit2-xcg.5.3.6).
