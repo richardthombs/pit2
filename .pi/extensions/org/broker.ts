@@ -96,14 +96,7 @@ async function getHeadCommit(cwd: string): Promise<string | null> {
 	}
 }
 
-function summarise(output: string): string {
-	const firstLine =
-		output.split("\n").find((l) => l.trim().length > 0) ?? "Task completed.";
-	return firstLine
-		.replace(/[#*`_>]/g, "")
-		.trim()
-		.slice(0, 150);
-}
+
 
 function extractBlockerContext(d: any): { title: string; summary: string } {
 	const title: string = d.title ?? d.id ?? "(unknown)";
@@ -382,7 +375,9 @@ export class Broker {
 					);
 				}
 			}
+			const startedAt = Date.now();
 			const result = await this.runTask(r.config, r.member.name, brief, cwd);
+			const durationSecs = Math.round((Date.now() - startedAt) / 1000);
 
 			// ── 2b. Memory update phase ────────────────────────────────────────
 			// Capture the task output now; the memory phase must not affect what we deliver.
@@ -412,7 +407,7 @@ export class Broker {
 			if (result.exitCode === 0) {
 				this._enqueueWrite(cwd, async () => {
 					try {
-						await this.captureResult(cwd, task.id, result.output, commitBefore);
+						await this.captureResult(cwd, task.id, result.output, commitBefore, r.member.name, role, durationSecs, result.usage);
 					} catch (err: any) {
 						this.notifyEM(
 							`Broker: captureResult failed for task ${task.id} ("${task.title}") — ` +
@@ -467,6 +462,10 @@ export class Broker {
 		taskId: string,
 		output: string,
 		commitBefore: string | null,
+		memberName: string,
+		role: string,
+		durationSecs: number,
+		usage: UsageStats | undefined,
 	): Promise<void> {
 		// Bug 2 guard: if the bead is already correctly closed (e.g. from a prior
 		// attempt), skip all writes to avoid overwriting a correct deliverable.
@@ -543,10 +542,14 @@ export class Broker {
 		// Bug 1: if bd close reports "not found", the task was already closed by a
 		// prior attempt — treat that as success rather than triggering error recovery.
 		try {
+			const inputK = ((usage?.input ?? 0) / 1000).toFixed(1);
+			const outputK = ((usage?.output ?? 0) / 1000).toFixed(1);
+			const cost = (usage?.cost ?? 0).toFixed(3);
+			const reason = `Completed by ${memberName} (${role}) — ${durationSecs}s · ↑${inputK}k ↓${outputK}k · $${cost}`;
 			await this.runBd(cwd, [
 				"close",
 				taskId,
-				`--reason=${summarise(output)}`,
+				`--reason=${reason}`,
 				"--json",
 			]);
 		} catch (err: any) {
