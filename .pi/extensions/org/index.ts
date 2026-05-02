@@ -64,6 +64,7 @@ interface BeadItem {
 	issue_type: "epic" | "task";
 	parent?: string;
 	labels?: string[];
+	assignee?: string;
 }
 
 interface BeadsTreeNode {
@@ -967,7 +968,7 @@ export default function (pi: ExtensionAPI) {
 				const isLastTask = taskIdx === node.tasks.length - 1;
 				const taskConnector = isLastTask ? "└─ " : "├─ ";
 				const taskSymbol = task.status === "in_progress" ? "●" : "○";
-				const member = task.status === "in_progress" ? memberForBead(task.id) : null;
+				const member = task.status === "in_progress" ? (task.assignee ?? memberForBead(task.id)) : null;
 				const memberSuffix = member ? `  ${member}` : "";
 				const taskBase = `${childContinue}${taskConnector}${taskSymbol} ${task.id}  `;
 				const taskTitleAvail = Math.max(0, width - taskBase.length - memberSuffix.length);
@@ -982,7 +983,7 @@ export default function (pi: ExtensionAPI) {
 				const isLast = idx === orphans.length - 1;
 				const connector = isLast ? "  └─ " : "  ├─ ";
 				const symbol = task.status === "in_progress" ? "●" : "○";
-				const member = task.status === "in_progress" ? memberForBead(task.id) : null;
+				const member = task.status === "in_progress" ? (task.assignee ?? memberForBead(task.id)) : null;
 				const memberSuffix = member ? `  ${member}` : "";
 				const rowBase = `${connector}${symbol} ${task.id}  `;
 				const titleAvail = Math.max(0, width - rowBase.length - memberSuffix.length);

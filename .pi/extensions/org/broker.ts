@@ -317,7 +317,7 @@ export class Broker {
 			// liveKeys.has check; double-dispatch at the TypeScript level is not possible.
 			this.liveKeys.add(task.id);
 			try {
-				await this.runBd(cwd, ["update", task.id, "--status=in_progress", "--json"]);
+				await this.runBd(cwd, ["update", task.id, "--status=in_progress", `--assignee=${r.member.name}`, "--json"]);
 			} catch (err: any) {
 				this.liveKeys.delete(task.id);
 				this.notifyEM(
