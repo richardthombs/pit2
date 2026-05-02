@@ -327,10 +327,10 @@ export class Broker {
 			}
 
 			// Update member state to working (resolveOrScale sets it too, but we
-			// add the task title here for the widget).
+			// add the task ID here so memberForBead() can match by bead ID).
 			this.memberState.set(r.member.name, {
 				status: "working",
-				task: task.title,
+				task: task.id,
 			});
 
 			// Fire and forget — runTask is NOT serialised through writeQueue.
@@ -420,7 +420,7 @@ export class Broker {
 			// ── 3. Update member state ────────────────────────────────────────────
 			this.memberState.set(r.member.name, {
 				status: result.exitCode === 0 ? "done" : "error",
-				task: task.title,
+				task: task.id,
 			});
 
 			// ── 4. Capture result + deliver to EM, or requeue (serialised through write queue) ─────
@@ -450,7 +450,7 @@ export class Broker {
 				this._enqueueWrite(cwd, () => this._requeueTask(cwd, task.id, reason));
 			}
 		} catch (err: any) {
-			this.memberState.set(r.member.name, { status: "error", task: task.title });
+			this.memberState.set(r.member.name, { status: "error", task: task.id });
 			const reason = err?.message ?? String(err);
 			this._enqueueWrite(cwd, () => this._requeueTask(cwd, task.id, reason));
 		} finally {

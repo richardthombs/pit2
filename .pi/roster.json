@@ -65,6 +65,12 @@
       "name": "Blake O'Brien",
       "role": "qa-engineer",
       "hiredAt": "2026-05-02T09:12:29.239Z"
+    },
+    {
+      "id": "jesse-andersen",
+      "name": "Jesse Andersen",
+      "role": "typescript-engineer",
+      "hiredAt": "2026-05-02T12:06:46.535Z"
     }
   ],
   "usedNames": [
@@ -87,6 +93,7 @@
     "Sage Okonkwo",
     "Kendall Mbeki",
     "Emery Vidal",
-    "Blake O'Brien"
+    "Blake O'Brien",
+    "Jesse Andersen"
   ]
 }

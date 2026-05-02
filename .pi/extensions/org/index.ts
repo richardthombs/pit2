@@ -55,6 +55,27 @@ type StreamEvent =
 	| { kind: "text"; text: string }
 	| { kind: "tool"; name: string; summary: string };
 
+// ─── Beads tree types ────────────────────────────────────────────────────────
+
+interface BeadItem {
+	id: string;
+	title: string;
+	status: "open" | "in_progress";
+	issue_type: "epic" | "task";
+	parent?: string;
+	labels?: string[];
+}
+
+interface BeadsTreeNode {
+	epic: BeadItem;
+	tasks: BeadItem[];
+}
+
+interface BeadsTree {
+	nodes: BeadsTreeNode[];
+	orphans: BeadItem[];
+}
+
 // ─── Name Pool ────────────────────────────────────────────────────────────────
 
 const NAME_POOL = [
@@ -575,6 +596,45 @@ async function ensureBeadsInit(
 	}
 }
 
+// ─── Beads tree cache ────────────────────────────────────────────────────────
+
+let cachedBeadsTree: BeadsTree = { nodes: [], orphans: [] };
+let beadsRefreshInFlight = false;
+
+function buildBeadsTree(items: BeadItem[]): BeadsTree {
+	const epics = items.filter(x => x.issue_type === "epic");
+	const tasks = items.filter(x => x.issue_type === "task");
+	const epicIds = new Set(epics.map(e => e.id));
+
+	const nodes: BeadsTreeNode[] = epics.map(epic => ({
+		epic,
+		tasks: tasks.filter(t => t.parent === epic.id),
+	}));
+
+	nodes.sort((a, b) => {
+		const aActive = a.epic.status === "in_progress" || a.tasks.some(t => t.status === "in_progress");
+		const bActive = b.epic.status === "in_progress" || b.tasks.some(t => t.status === "in_progress");
+		return (bActive ? 1 : 0) - (aActive ? 1 : 0);
+	});
+
+	const orphans = tasks.filter(t => !t.parent || !epicIds.has(t.parent));
+
+	return { nodes, orphans };
+}
+
+async function refreshBeadsCache(cwd: string): Promise<void> {
+	if (beadsRefreshInFlight) return;
+	beadsRefreshInFlight = true;
+	try {
+		const { stdout } = await runBd(cwd, ["list", "--status=open,in_progress", "--json"]);
+		cachedBeadsTree = buildBeadsTree(JSON.parse(stdout) as BeadItem[]);
+	} catch {
+		// Keep stale cache on transient bd failures
+	} finally {
+		beadsRefreshInFlight = false;
+	}
+}
+
 // ─── Scaling lock (module-scope so resolveOrScale can access it) ───────────
 
 const scalingLocks = new Map<string, Promise<void>>();
@@ -799,7 +859,7 @@ export default function (pi: ExtensionAPI) {
 		return result;
 	}
 
-	function buildWidgetLines(cwd: string, width: number = 120): string[] {
+	function buildTeamLines(cwd: string, width: number): string[] {
 		const roster = loadRoster(cwd);
 		const lines: string[] = [`  Engineering Manager`];
 
@@ -852,6 +912,97 @@ export default function (pi: ExtensionAPI) {
 		return lines.map(line => truncateToWidth(line, width));
 	}
 
+	function memberForBead(beadId: string): string | null {
+		for (const [name, state] of memberState) {
+			if (state.status === "working" && state.task === beadId) return name;
+		}
+		return null;
+	}
+
+	function zipColumns(left: string[], right: string[], leftWidth: number): string[] {
+		const len = Math.max(left.length, right.length);
+		const rows: string[] = [];
+		for (let i = 0; i < len; i++) {
+			const l = left[i] ?? "";
+			const padded = l.length >= leftWidth ? l.slice(0, leftWidth) : l.padEnd(leftWidth);
+			const r = right[i] ?? "";
+			rows.push(`${padded}│${r}`);
+		}
+		return rows;
+	}
+
+	function buildBeadsLines(width: number): string[] {
+		if (width < 30) return [];
+		const { nodes, orphans } = cachedBeadsTree;
+		const lines: string[] = [];
+
+		const activeCount =
+			nodes.filter(n =>
+				n.epic.status === "in_progress" || n.tasks.some(t => t.status === "in_progress")
+			).length + orphans.filter(t => t.status === "in_progress").length;
+		const totalEpics = nodes.length;
+		lines.push(truncateToWidth(
+			`  ◈ Workstreams (${totalEpics} epic${totalEpics !== 1 ? "s" : ""} · ${activeCount} active)`,
+			width,
+		));
+
+		if (nodes.length === 0 && orphans.length === 0) {
+			lines.push("  (no open workstreams)");
+			return lines;
+		}
+
+		nodes.forEach((node, nodeIdx) => {
+			const isLastTop = nodeIdx === nodes.length - 1 && orphans.length === 0;
+			const epicConnector = isLastTop ? "  └─ " : "  ├─ ";
+			const epicSymbol =
+				node.epic.status === "in_progress" || node.tasks.some(t => t.status === "in_progress")
+					? "●" : "○";
+			const epicBase = `${epicConnector}${epicSymbol} ${node.epic.id}  `;
+			const epicTitleAvail = Math.max(0, width - epicBase.length);
+			const epicTitleStr = epicTitleAvail > 3 ? truncateToWidth(node.epic.title, epicTitleAvail) : "";
+			lines.push(truncateToWidth(`${epicBase}${epicTitleStr}`, width));
+
+			const childContinue = isLastTop ? "      " : "  │   ";
+			node.tasks.forEach((task, taskIdx) => {
+				const isLastTask = taskIdx === node.tasks.length - 1;
+				const taskConnector = isLastTask ? "└─ " : "├─ ";
+				const taskSymbol = task.status === "in_progress" ? "●" : "○";
+				const member = task.status === "in_progress" ? memberForBead(task.id) : null;
+				const memberSuffix = member ? `  ${member}` : "";
+				const taskBase = `${childContinue}${taskConnector}${taskSymbol} ${task.id}  `;
+				const taskTitleAvail = Math.max(0, width - taskBase.length - memberSuffix.length);
+				const taskTitleStr = taskTitleAvail > 3 ? truncateToWidth(task.title, taskTitleAvail) : "";
+				lines.push(truncateToWidth(`${taskBase}${taskTitleStr}${memberSuffix}`, width));
+			});
+		});
+
+		if (orphans.length > 0) {
+			lines.push(truncateToWidth("  ── other tasks", width));
+			orphans.forEach((task, idx) => {
+				const isLast = idx === orphans.length - 1;
+				const connector = isLast ? "  └─ " : "  ├─ ";
+				const symbol = task.status === "in_progress" ? "●" : "○";
+				const member = task.status === "in_progress" ? memberForBead(task.id) : null;
+				const memberSuffix = member ? `  ${member}` : "";
+				const rowBase = `${connector}${symbol} ${task.id}  `;
+				const titleAvail = Math.max(0, width - rowBase.length - memberSuffix.length);
+				const titleStr = titleAvail > 3 ? truncateToWidth(task.title, titleAvail) : "";
+				lines.push(truncateToWidth(`${rowBase}${titleStr}${memberSuffix}`, width));
+			});
+		}
+
+		return lines;
+	}
+
+	function buildWidgetLines(cwd: string, width: number = 120): string[] {
+		const teamWidth = Math.floor(width * 0.42);
+		const beadsWidth = width - teamWidth - 1;
+		const teamLines = buildTeamLines(cwd, teamWidth);
+		if (beadsWidth < 30) return teamLines;
+		const beadsLines = buildBeadsLines(beadsWidth);
+		return zipColumns(teamLines, beadsLines, teamWidth);
+	}
+
 	let rosterWatcher: fs.FSWatcher | null = null;
 
 	function scheduleDoneReset(memberName: string): void {
@@ -868,7 +1019,7 @@ export default function (pi: ExtensionAPI) {
 		memberTimers.set(memberName, timer);
 	}
 
-	function updateWidget(ctx: any): void {
+	async function updateWidget(ctx: any): Promise<void> {
 		let hasUI: boolean;
 		try {
 			hasUI = ctx?.hasUI;
@@ -877,6 +1028,7 @@ export default function (pi: ExtensionAPI) {
 		}
 		if (!hasUI) return;
 		lastCtx = ctx;
+		await refreshBeadsCache(ctx.cwd);
 		ctx.ui.setWidget("org-team", (_tui: any, _theme: any) => ({
 			render(width: number): string[] {
 				return buildWidgetLines(ctx.cwd, width);

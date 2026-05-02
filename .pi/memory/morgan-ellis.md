@@ -110,6 +110,13 @@ Where `verb` comes from `Broker.ROLE_VERBS[role] ?? "complete"` (e.g. "test", "i
 - `contextPct`: `undefined` = not polled, `null` = model doesn't report, `number` = percentage
 - Widget renders `ctx:XX%` unconditionally when `contextPct` is a number (threshold removed)
 
+### Beads Tree Widget (epic pit2-58r) — Implemented & Verified (2026-05-02)
+- `cachedBeadsTree` + `beadsRefreshInFlight` module-level vars at lines 601–602 of `index.ts`
+- All six functions present: `buildBeadsTree` (604), `refreshBeadsCache` (625), `memberForBead` (915), `zipColumns` (922), `buildBeadsLines` (934), `buildWidgetLines` (997)
+- `updateWidget` is `async function updateWidget(ctx: any): Promise<void>` at line 1022
+- All three `memberState.set()` calls in broker.ts (lines 333, 423, 453) correctly use `task.id` not `task.title`
+- `bd list` vs `bd show` status discrepancy observed previously: trust `bd show` for authoritative status
+
 ### Known Open Items (non-blocking)
 - `fmtTokens` imported in `index.ts` but never used — dead import
 - `MEMORY_DIR`, `VALID_MEMORY_SECTIONS`, `MAX_MEMORY_ITEMS_PER_SECTION`, `extractMemoryEntries()` remain as dead exports in `utils.ts` — harmless
