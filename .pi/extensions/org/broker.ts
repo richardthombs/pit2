@@ -13,12 +13,7 @@
  */
 
 import * as path from "node:path";
-import * as fs from "node:fs/promises";
-import { exec as execCb } from "node:child_process";
-import { promisify } from "node:util";
 import { RpcClient } from "@mariozechner/pi-coding-agent";
-
-const exec = promisify(execCb);
 
 // ─── Local types (mirrored from index.ts to avoid circular imports) ──────────
 
@@ -87,22 +82,11 @@ interface BeadsTask {
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
 
-async function getHeadCommit(cwd: string): Promise<string | null> {
-	try {
-		const { stdout } = await exec("git log -1 --format=%H", { cwd });
-		return stdout.trim() || null;
-	} catch {
-		return null; // not a git repo, or no commits yet
-	}
-}
-
-
 
 function extractBlockerContext(d: any): { title: string; summary: string } {
 	const title: string = d.title ?? d.id ?? "(unknown)";
 	const meta = d.metadata ?? {};
 	if (meta.git_commit) return { title, summary: `see commit ${meta.git_commit}` };
-	if (meta.result_file) return { title, summary: `see file ${meta.result_file}` };
 	if (d.notes) {
 		return {
 			title,
@@ -113,8 +97,6 @@ function extractBlockerContext(d: any): { title: string; summary: string } {
 }
 
 const UPSTREAM_CAP = 2000;
-
-const TEXT_CAP = 40 * 1024; // 40 KB — leaves ~24 KB headroom in the 64 KB notes ceiling
 
 // ─── Broker ───────────────────────────────────────────────────────────────────
 
@@ -164,6 +146,7 @@ export class Broker {
 	private scheduleDoneReset!: (memberName: string) => void;
 	private accumulateMemberUsage!: (memberName: string, usage: UsageStats) => void;
 	private getLiveClient!: (cwd: string, memberName: string) => RpcClient | undefined;
+	private evictLiveClient!: (cwd: string, memberName: string) => void;
 
 	constructor() {}
 
@@ -181,6 +164,7 @@ export class Broker {
 		scheduleDoneReset: (memberName: string) => void,
 		accumulateMemberUsage: (memberName: string, usage: UsageStats) => void,
 		getLiveClient: (cwd: string, memberName: string) => RpcClient | undefined,
+		evictLiveClient: (cwd: string, memberName: string) => void,
 	): void {
 		this.runBd = runBd;
 		this.resolveOrScale = resolveOrScale;
@@ -191,6 +175,7 @@ export class Broker {
 		this.scheduleDoneReset = scheduleDoneReset;
 		this.accumulateMemberUsage = accumulateMemberUsage;
 		this.getLiveClient = getLiveClient;
+		this.evictLiveClient = evictLiveClient;
 	}
 
 	/**
@@ -254,7 +239,9 @@ export class Broker {
 	 */
 	private _enqueueMemoryPhase(roleSlug: string, fn: () => Promise<void>): void {
 		const prior = this.memoryPhaseQueue.get(roleSlug) ?? Promise.resolve();
-		const next = prior.then(fn).catch(() => {});
+		const next = prior.then(fn).catch((err) => {
+			this.notifyEM(`Broker: unhandled memory-phase error — ${err?.message ?? err}`);
+		});
 		this.memoryPhaseQueue.set(roleSlug, next);
 	}
 
@@ -266,7 +253,9 @@ export class Broker {
 		const prev = this.writeQueue.get(cwd) ?? Promise.resolve();
 		const next = prev.then(fn);
 		// Keep the chain alive even on error so future writes are not blocked
-		this.writeQueue.set(cwd, next.catch(() => {}));
+		this.writeQueue.set(cwd, next.catch((err) => {
+			this.notifyEM(`Broker: unhandled write-queue error — ${err?.message ?? err}`);
+		}));
 	}
 
 	/**
@@ -279,9 +268,17 @@ export class Broker {
 		try {
 			const { stdout } = await this.runBd(cwd, ["ready", "--type=task", "--json"]);
 			tasks = JSON.parse(stdout) as BeadsTask[];
-		} catch (err: any) {
-			this.notifyEM(`Broker: bd ready failed — ${err?.message ?? err}`);
-			return;
+		} catch (firstErr: any) {
+			// Retry once after a short delay to handle transient DB lock contention
+			try {
+				await new Promise(res => setTimeout(res, 500));
+				const { stdout } = await this.runBd(cwd, ["ready", "--type=task", "--json"]);
+				tasks = JSON.parse(stdout) as BeadsTask[];
+			} catch (err: any) {
+				const detail = err?.stderr?.trim() || err?.message || String(err);
+				this.notifyEM(`Broker: bd ready failed — ${detail}`);
+				return;
+			}
 		}
 
 		for (const task of tasks) {
@@ -317,7 +314,7 @@ export class Broker {
 			// liveKeys.has check; double-dispatch at the TypeScript level is not possible.
 			this.liveKeys.add(task.id);
 			try {
-				await this.runBd(cwd, ["update", task.id, "--status=in_progress", `--assignee=${r.member.name}`, "--json"]);
+				await this.runBd(cwd, ["update", task.id, "--claim", `--assignee=${r.member.name}`, "--json"]);
 			} catch (err: any) {
 				this.liveKeys.delete(task.id);
 				this.notifyEM(
@@ -374,21 +371,23 @@ export class Broker {
 			].join("\n");
 			if (upstreamContext) brief += `\n\n${upstreamContext}`;
 
-			// ── 2. Snapshot git HEAD; clear prior context; run task ─────────────────
+			// ── 2. Clear prior context; run task ─────────────────────────────────────
 			// newSession() wipes the conversation window so the member sees only the
 			// new brief — not residue from their previous task. Memory-file continuity
 			// is handled by the system-prompt injection at session start, so clearing
-			// the context window is safe. If newSession() fails we proceed with the
-			// existing session rather than failing the task.
-			const commitBefore = await getHeadCommit(cwd);
+			// the context window is safe. If newSession() fails, the client is evicted
+			// so the next runTask call creates a fresh session (context bleed prevention).
 			const liveClient = this.getLiveClient(cwd, r.member.name);
 			if (liveClient) {
 				try {
 					await liveClient.newSession();
 				} catch (err: any) {
 					this.notifyEM(
-						`Broker: newSession() failed for ${r.member.name} before task ${task.id} — proceeding with existing session. ${err?.message ?? err}`,
+						`Broker: newSession() failed for ${r.member.name} — evicting client to prevent context bleed. Task ${task.id} will run in a fresh session. ${err?.message ?? err}`,
 					);
+					try { await liveClient.stop(); } catch { /* ignore stop errors */ }
+					this.evictLiveClient(cwd, r.member.name);
+					// liveClient is now gone; runTask will create a fresh one
 				}
 			}
 			const startedAt = Date.now();
@@ -427,7 +426,7 @@ export class Broker {
 			if (result.exitCode === 0) {
 				this._enqueueWrite(cwd, async () => {
 					try {
-						await this.captureResult(cwd, task.id, result.output, commitBefore, r.member.name, role, durationSecs, result.usage);
+						await this.captureResult(cwd, task.id, result.output, r.member.name, role, durationSecs, result.usage);
 					} catch (err: any) {
 						this.notifyEM(
 							`Broker: captureResult failed for task ${task.id} ("${task.title}") — ` +
@@ -461,19 +460,8 @@ export class Broker {
 	/**
 	 * Captures the result of a completed task into beads.
 	 *
-	 * Branches:
-	 * - File-change: a new git commit landed since commitBefore → record SHA in
-	 *   metadata.git_commit via `bd update --set-metadata`, then close.
-	 * - Text fits (≤40 KB AND fits in remaining notes capacity): append full output
-	 *   to notes via `--append-notes`, then close.
-	 * - Text too large (>40 KB OR would overflow the 50 KB notes threshold): write
-	 *   to `.pi/task-results/<id>.md`, record path in metadata.result_file via
-	 *   `bd update --set-metadata`, then close.
-	 *
-	 * Before appending, a `bd show` call fetches existing notes length to guard
-	 * against the retry-overflow scenario (first-run notes + second-run output
-	 * exceeding Dolt's 64 KB column ceiling). If `bd show` fails, file-offload
-	 * is forced as the safe fallback.
+	 * Throws if output exceeds 60 KB (triggers EM notification via the write queue).
+	 * Otherwise appends the full output to notes and closes the task.
 	 *
 	 * Must be called inside the write queue (serialised).
 	 */
@@ -481,102 +469,35 @@ export class Broker {
 		cwd: string,
 		taskId: string,
 		output: string,
-		commitBefore: string | null,
 		memberName: string,
 		role: string,
 		durationSecs: number,
 		usage: UsageStats | undefined,
 	): Promise<void> {
-		// Bug 2 guard: if the bead is already correctly closed (e.g. from a prior
+		// Guard: if the bead is already correctly closed (e.g. from a prior
 		// attempt), skip all writes to avoid overwriting a correct deliverable.
 		try {
-			const { stdout: guardOut } = await this.runBd(cwd, ["show", taskId, "--json"]);
-			const guardTask = (JSON.parse(guardOut) as any[])[0];
-			if (guardTask?.status === "closed" && guardTask?.close_reason) {
-				return;
-			}
-		} catch {
-			// Cannot determine current status — proceed with normal flow.
+			const { stdout } = await this.runBd(cwd, ["show", taskId, "--json"]);
+			const current = (JSON.parse(stdout) as any[])[0];
+			if (current?.status === "closed" && current?.close_reason) return;
+		} catch { /* proceed */ }
+
+		const MAX_BYTES = 60 * 1024;
+		if (output.length > MAX_BYTES) {
+			throw new Error(
+				`Output too large: ${output.length} bytes exceeds the ${MAX_BYTES}-byte limit. ` +
+				`Revise the task brief to request a shorter response.`,
+			);
 		}
 
-		// Snapshot git HEAD now (task has already completed by the time this runs).
-		const commitAfter = await getHeadCommit(cwd);
-		const isFileChange = commitAfter !== null && commitAfter !== commitBefore;
+		await this.runBd(cwd, ["update", taskId, `--append-notes=${output}`, "--json"]);
 
-		if (isFileChange) {
-			// File-change path: record commit SHA in metadata, then close.
-			await this.runBd(cwd, [
-				"update",
-				taskId,
-				"--set-metadata",
-				`git_commit=${commitAfter}`,
-				"--json",
-			]);
-		} else {
-			// Determine remaining notes capacity before deciding how to store output.
-			// Dolt's notes column has a ~64 KB ceiling; use 50 KB as a conservative
-			// threshold so accumulated notes from prior attempts are never overflowed.
-			let remaining = 0; // conservative default — forces file-offload if fetch fails
-			try {
-				const { stdout: showOut } = await this.runBd(cwd, ["show", taskId, "--json"]);
-				const currentTask = (JSON.parse(showOut) as any[])[0];
-				const currentNotesLength =
-					(currentTask?.notes as string | null | undefined)?.length ?? 0;
-				remaining = 50_000 - currentNotesLength;
-			} catch {
-				// bd show failed — assume no capacity remains; force file-offload below.
-			}
-
-			if (output.length <= TEXT_CAP && output.length <= remaining) {
-				// Text-output path: fits within both the 40 KB soft cap and remaining
-				// notes capacity — append directly.
-				await this.runBd(cwd, [
-					"update",
-					taskId,
-					`--append-notes=${output}`,
-					"--json",
-				]);
-			} else {
-				// File-offload path: output exceeds TEXT_CAP or would overflow existing notes.
-				const outPath = path.join(cwd, ".pi", "task-results", `${taskId}.md`);
-				await fs.mkdir(path.dirname(outPath), { recursive: true });
-				await fs.writeFile(outPath, output, "utf8");
-				await this.runBd(cwd, [
-					"update",
-					taskId,
-					"--append-notes",
-					`[Full output written to file — see metadata.result_file]`,
-					"--json",
-				]);
-				await this.runBd(cwd, [
-					"update",
-					taskId,
-					"--set-metadata",
-					`result_file=${outPath}`,
-					"--json",
-				]);
-			}
-		}
-
-		// Always close with a one-line human-readable summary.
-		// Bug 1: if bd close reports "not found", the task was already closed by a
-		// prior attempt — treat that as success rather than triggering error recovery.
-		try {
-			const inputK = ((usage?.input ?? 0) / 1000).toFixed(1);
-			const outputK = ((usage?.output ?? 0) / 1000).toFixed(1);
-			const cost = (usage?.cost ?? 0).toFixed(3);
-			const reason = `Completed by ${memberName} (${role}) — ${durationSecs}s · ↑${inputK}k ↓${outputK}k · $${cost}`;
-			await this.runBd(cwd, [
-				"close",
-				taskId,
-				`--reason=${reason}`,
-				"--json",
-			]);
-		} catch (err: any) {
-			const msg = (err?.message ?? String(err)).toLowerCase();
-			if (!msg.includes("not found")) throw err;
-			// "not found" → task already closed; treat as success.
-		}
+		const inputK  = ((usage?.input  ?? 0) / 1000).toFixed(1);
+		const outputK = ((usage?.output ?? 0) / 1000).toFixed(1);
+		const cost    = (usage?.cost    ?? 0).toFixed(3);
+		const reason  = `Completed by ${memberName} (${role}) — ${durationSecs}s · ↑${inputK}k ↓${outputK}k · $${cost}`;
+		// bd close is silently idempotent — re-closing an already-closed task exits 0.
+		await this.runBd(cwd, ["close", taskId, `--reason=${reason}`, "--json"]);
 	}
 
 	/**

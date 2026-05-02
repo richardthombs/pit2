@@ -187,8 +187,22 @@ export class Broker {
     };
 
     private async _dispatch(cwd: string) {
-        const { stdout } = await runBd(cwd, ["ready", "--type=task", "--json"]);
-        const tasks = JSON.parse(stdout) as BeadsTask[];
+        let tasks: BeadsTask[];
+        try {
+            const { stdout } = await runBd(cwd, ["ready", "--type=task", "--json"]);
+            tasks = JSON.parse(stdout) as BeadsTask[];
+        } catch (firstErr: any) {
+            // Retry once after 500ms — handles transient DB lock contention
+            try {
+                await new Promise(res => setTimeout(res, 500));
+                const { stdout } = await runBd(cwd, ["ready", "--type=task", "--json"]);
+                tasks = JSON.parse(stdout) as BeadsTask[];
+            } catch (err: any) {
+                const detail = err?.stderr?.trim() || err?.message || String(err);
+                this.notifyEM(`Broker: bd ready failed — ${detail}`);
+                return;
+            }
+        }
 
         for (const task of tasks) {
             const role = task.labels?.[0];
@@ -456,9 +470,19 @@ The re-queued task will appear in the next `bd ready` poll cycle. The broker wil
 
 If a `runBd` call within `_runAndClose` throws (e.g., locked DB, timeout), the error is caught by the `writeQueue` chain. The task is left in `in_progress` state in beads. The 30s safety-net poll will not re-dispatch it (it is no longer `open`). The EM must manually inspect and reset via `bd_task_update`.
 
-**Mitigation:** The broker should log a warning via `notifyEM` on any `runBd` failure. Future work: a `bd_broker_status` tool that shows tasks stuck in `in_progress` beyond a configurable timeout.
+**Mitigation:** The broker logs a warning via `notifyEM` on any `runBd` failure, surfacing the actual `stderr` text from the `execFile` error (`err?.stderr?.trim() || err?.message || String(err)`). Future work: a `bd_broker_status` tool that shows tasks stuck in `in_progress` beyond a configurable timeout.
 
-### 11.3 Member crash between task start and task end
+### 11.3 Transient `bd ready` failure
+
+The `bd ready` poll at the start of `_dispatchCycle` can fail transiently due to Dolt file-lock contention when multiple writes are in flight. The broker retries once after a 500ms delay before giving up. If the retry also fails, `notifyEM` is called with the stderr text and the cycle returns without dispatching. The 30s safety-net poll will retry on the next tick; no tasks are permanently lost.
+
+### 11.3 `bd ready` transient failure (polling)
+
+If the `bd ready` poll in `_dispatchCycle` throws (e.g., transient SQLite lock contention), the broker retries once after a 500ms delay before giving up. Only if the retry also fails does it call `notifyEM`. Error text is sourced from `err?.stderr?.trim() || err?.message || String(err)`, so the raw SQLite/DB error from stderr is surfaced in the EM notification rather than the opaque `"Command failed: bd ready…"` shell message.
+
+This retry is intentionally shallow (one attempt, short delay). Persistent `bd ready` failures indicate a structural DB problem that the EM should investigate; the broker does not attempt further retries or exponential backoff.
+
+### 11.4 Member crash between task start and task end
 
 The existing crash recovery in `index.ts` (attaching an exit listener via `(client as any).process`) handles the member process dying. If the member crashes, `runTask` throws, which is caught by `_runAndClose` and triggers §11.1 recovery (re-queue + EM notification).
 

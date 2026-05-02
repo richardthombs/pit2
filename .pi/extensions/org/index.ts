@@ -805,6 +805,8 @@ export default function (pi: ExtensionAPI) {
 		(memberName, usage) => accumulateUsage(memberName, usage),
 		// getLiveClient — returns the live RpcClient for a member if available
 		(cwd, memberName) => liveMembers.get(liveMemberKey(cwd, memberName))?.client,
+		// evictLiveClient — removes a member's live client, forcing a fresh one on next task
+		(cwd, memberName) => { liveMembers.delete(liveMemberKey(cwd, memberName)); },
 	);
 
 	function accumulateUsage(memberName: string, delta: UsageStats): void {

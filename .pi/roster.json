@@ -37,12 +37,6 @@
       "hiredAt": "2026-04-30T04:38:53.887Z"
     },
     {
-      "id": "remy-osei",
-      "name": "Remy Osei",
-      "role": "typescript-engineer",
-      "hiredAt": "2026-05-01T13:55:22.125Z"
-    },
-    {
       "id": "sage-okonkwo",
       "name": "Sage Okonkwo",
       "role": "typescript-engineer",
@@ -71,6 +65,42 @@
       "name": "Hayden Yamamoto",
       "role": "software-architect",
       "hiredAt": "2026-05-02T13:25:55.966Z"
+    },
+    {
+      "id": "darcy-oduya",
+      "name": "Darcy Oduya",
+      "role": "technical-writer",
+      "hiredAt": "2026-05-02T13:51:10.794Z"
+    },
+    {
+      "id": "tatum-larsson",
+      "name": "Tatum Larsson",
+      "role": "technical-writer",
+      "hiredAt": "2026-05-02T13:51:11.288Z"
+    },
+    {
+      "id": "drew-nakamura",
+      "name": "Drew Nakamura",
+      "role": "technical-writer",
+      "hiredAt": "2026-05-02T13:51:12.109Z"
+    },
+    {
+      "id": "rowan-fernandez",
+      "name": "Rowan Fernandez",
+      "role": "technical-writer",
+      "hiredAt": "2026-05-02T13:51:12.587Z"
+    },
+    {
+      "id": "scout-petrov",
+      "name": "Scout Petrov",
+      "role": "qa-engineer",
+      "hiredAt": "2026-05-02T14:59:14.020Z"
+    },
+    {
+      "id": "vale-hassan",
+      "name": "Vale Hassan",
+      "role": "typescript-engineer",
+      "hiredAt": "2026-05-02T18:43:51.907Z"
     }
   ],
   "usedNames": [
@@ -95,6 +125,12 @@
     "Emery Vidal",
     "Blake O'Brien",
     "Jesse Andersen",
-    "Hayden Yamamoto"
+    "Hayden Yamamoto",
+    "Darcy Oduya",
+    "Tatum Larsson",
+    "Drew Nakamura",
+    "Rowan Fernandez",
+    "Scout Petrov",
+    "Vale Hassan"
   ]
 }
