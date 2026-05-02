@@ -19,8 +19,17 @@
 ### broker.ts structure
 - `configure()` injects dependencies rather than the constructor (module-level singleton pattern)
 - `getLiveClient` is the 9th parameter to `configure()`, injected so broker can call `newSession()` and `prompt()` on members
-- `_runAndClose()` is the private method that drives the full task lifecycle: newSession → runTask → memory-update phase → state update
-- Two-phase execution: after a successful task, `_runAndClose` prompts the member's live client with a memory-update message and calls `waitForIdle(30_000)` before marking the member idle
+- `_runAndClose()` drives the full task lifecycle: newSession → runTask → enqueue memory phase (fire-and-forget) → state update → captureResult/deliverResult
+- Memory phase is now fire-and-forget via `_enqueueMemoryPhase(roleSlug, fn)` — same chain pattern as `_enqueueWrite` but keyed by role slug, not cwd
+
+### Memory: per-role shared files (ADR-008, implemented pit2-nbc.1)
+- Memory files are now `.pi/memory/<role-slug>.md` (e.g. `typescript-engineer.md`), NOT per-member
+- `roleMemoryPath(cwd, roleSlug)` replaces the old `memberMemoryPath(cwd, memberName)` in `index.ts`
+- `initializeClientMemory(client, memberName, cwd, config)` — takes `config: AgentConfig` as 4th param; reads from `roleMemoryPath(cwd, config.name)`
+- `buildMemberSystemPromptFile()` injects `roleMemoryPath(cwd, config.name)` into the system prompt
+- `/fire` command and `fire` tool do NOT delete the memory file (it's shared); only `memberSystemPromptPath` is cleaned up on fire
+- `broker.memoryPhaseQueue: Map<string, Promise<void>>` serialises phase-2 per role slug; cleared in `broker.start()`
+- Startup advisory: `session_start` checks for legacy per-member files and warns the EM if the role file is missing
 
 ### Key API facts
 - `RpcClient` is imported from `@mariozechner/pi-coding-agent`
@@ -31,4 +40,5 @@
 
 ### Tooling gotchas
 - **Edit tool atomicity:** when one edit in a batch fails, the entire batch is rolled back — no partial applies. Verify patterns before mixing many independent edits in one call.
+- **Edit tool uniqueness:** when the same line appears in two functions (e.g. `const memPath = ...`), include surrounding unique context (e.g. the function signature or a unique comment) to disambiguate.
 - **Box-drawing characters:** the edit tool can't reliably match `─` (U+2500) and similar box-drawing chars — use a Python script for those edits instead.

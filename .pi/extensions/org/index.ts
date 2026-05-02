@@ -184,9 +184,8 @@ export function listAvailableRoles(cwd: string): string[] {
 
 // ─── Memory helpers ──────────────────────────────────────────────────────────
 
-function memberMemoryPath(cwd: string, memberName: string): string {
-	const id = memberName.toLowerCase().replace(/\s+/g, '-');
-	return path.join(cwd, '.pi', 'memory', `${id}.md`);
+function roleMemoryPath(cwd: string, roleSlug: string): string {
+	return path.join(cwd, '.pi', 'memory', `${roleSlug}.md`);
 }
 
 // ─── Subagent persistent clients ────────────────────────────────────────────
@@ -221,7 +220,7 @@ async function buildMemberSystemPromptFile(
 	cwd: string,
 ): Promise<string> {
 	const filePath = memberSystemPromptPath(cwd, memberName);
-	const memPath = memberMemoryPath(cwd, memberName);
+	const memPath = roleMemoryPath(cwd, config.name);
 	let memInstructions: string;
 	try {
 		const memTemplatePath = path.join(cwd, ".pi", "prompts", "memory.md");
@@ -251,8 +250,9 @@ async function initializeClientMemory(
 	client: RpcClient,
 	memberName: string,
 	cwd: string,
+	config: AgentConfig,
 ): Promise<void> {
-	const memPath = memberMemoryPath(cwd, memberName);
+	const memPath = roleMemoryPath(cwd, config.name);
 	let memContent: string | null = null;
 	try {
 		const raw = fs.readFileSync(memPath, "utf-8");
@@ -410,7 +410,7 @@ async function runTask(
 	// ── 3. Memory initialization (first task on a fresh client only) ─────────────────
 	if (!entry.initialized) {
 		try {
-			await initializeClientMemory(client, memberName, cwd);
+			await initializeClientMemory(client, memberName, cwd, config);
 			entry.initialized = true;
 		} catch (initErr: any) {
 			// Memory injection failed — remove the broken client so the next call starts fresh
@@ -935,6 +935,32 @@ export default function (pi: ExtensionAPI) {
 
 		await ensureBeadsInit(ctx.cwd, (msg, level) => ctx.ui.notify(msg, level));
 		broker.start(ctx.cwd);
+
+		// Advisory: for each role in the roster, if the shared role memory file doesn't
+		// exist yet but old per-member memory files do, prompt the EM to merge them.
+		const memDir = path.join(ctx.cwd, '.pi', 'memory');
+		const advisoryRoster = loadRoster(ctx.cwd);
+		const advisoryRolesChecked = new Set<string>();
+		for (const m of advisoryRoster.members) {
+			if (advisoryRolesChecked.has(m.role)) continue;
+			advisoryRolesChecked.add(m.role);
+			const roleFile = roleMemoryPath(ctx.cwd, m.role);
+			if (!fs.existsSync(roleFile)) {
+				const membersOfRole = advisoryRoster.members.filter(x => x.role === m.role);
+				const legacyFiles = membersOfRole
+					.map(x => path.join(memDir, `${x.id}.md`))
+					.filter(p => fs.existsSync(p));
+				if (legacyFiles.length > 0) {
+					const fileNames = legacyFiles.map(p => path.basename(p)).join(', ');
+					ctx.ui.notify(
+						`Role memory file .pi/memory/${m.role}.md does not exist yet.\n` +
+						`Per-member files found: ${fileNames}\n` +
+						`Consider merging their contents into the role file before the next task.`,
+						'warn',
+					);
+				}
+			}
+		}
 	});
 
 	pi.on("session_shutdown", async () => {
@@ -1085,12 +1111,6 @@ export default function (pi: ExtensionAPI) {
 			// Keep name in usedNames so it won't be re-assigned
 			await saveRoster(ctx.cwd, roster);
 			memberState.delete(member.name);
-			// Clean up member memory file if it exists
-			try {
-				await fs.promises.unlink(memberMemoryPath(ctx.cwd, member.name));
-			} catch {
-				// File may not exist — that's fine
-			}
 			// Clean up member system prompt file if it exists
 			try {
 				await fs.promises.unlink(memberSystemPromptPath(ctx.cwd, member.name));
@@ -1166,12 +1186,6 @@ export default function (pi: ExtensionAPI) {
 			// Name stays in usedNames — permanently retired
 			await saveRoster(ctx.cwd, roster);
 			memberState.delete(member.name);
-			// Clean up member memory file if it exists
-			try {
-				await fs.promises.unlink(memberMemoryPath(ctx.cwd, member.name));
-			} catch {
-				// File may not exist — that's fine
-			}
 			// Clean up member system prompt file if it exists
 			try {
 				await fs.promises.unlink(memberSystemPromptPath(ctx.cwd, member.name));

@@ -18,6 +18,23 @@
 
 - Memory/prompt template: `/Users/richardthombs/dev/pit2/.pi/prompts/memory.md` — generic template (name/path are placeholders filled at agent creation time)
 
+## pi widget API (confirmed from interactive-mode.js source)
+
+- `setWidget(key, factory, { placement: "belowEditor" })` — factory form receives `(tui, theme)` and returns `{ render(width): string[]; invalidate?(): void; dispose?(): void }`
+- Multiple widgets with the same `placement` are **stacked vertically** (all rendered as children of a container). There is **no native side-by-side column layout** — must be implemented with string-padding inside a single widget's `render()` output.
+- `render(width)` is called synchronously on every TUI repaint. Async data must be pre-fetched and cached; render reads from cache.
+- The existing `org-team` widget already uses the factory form (not the string-array form).
+
+## Beads tree widget design (pit2-58r)
+
+- **ADR-008 (Proposed):** Single `org-team` widget, columnar `render(width)` — team left (~42%), `│` separator, beads right (~58%). No new `setWidget` key.
+- Data: `bd list --status=open,in_progress --json` — one query returns both epics and tasks. Tasks carry `parent` field pointing to epic ID. Epics have no `parent`.
+- Cache: module-level `cachedBeadsTree` + `beadsRefreshInFlight` flag. Refresh called at the start of `updateWidget()` (async promotion). Single-inflight guard prevents concurrent `bd list` spawns.
+- `MemberState.task` must hold the exact bead ID (not a human summary) for the member-name lookup to match beads in the tree panel — small broker dispatch change required.
+- Min-width guard: hide beads panel below ~100 cols to avoid narrow-terminal breakage.
+- `buildBeadsTree(items)` sorts nodes: epics with in_progress tasks first.
+- Orphan tasks (parent epic closed/absent from list) collected separately and shown under `── other tasks` at the bottom.
+
 ## Decisions made
 
 - **ADR-007 (Proposed):** Use Option C (structured `<result>` block) to separate task result from memory commentary. Rationale: Option A conflicts with broker's own `captureResult` writes; Option B requires refactoring `RunTaskFn` to multi-phase; Option C is a ~5-line extraction function + brief template change with graceful fallback. See pit2-qxj for full analysis.

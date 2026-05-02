@@ -8,4 +8,5 @@
 - **My memory file is always modified on `beads-integration`:** switching branches will fail unless the file is stashed first (`git stash` / `git stash pop`).
 
 ## Branch notes
-- `beads-integration`: merged into `main` on 2026-05-02; branch retained (not deleted)
+- `beads-integration`: merged into `main` on 2026-05-02; branch retained and **still the active development branch** — task briefs may say "on main" loosely, but changes land on `beads-integration`. Commit and push there unless explicitly told otherwise.
+- `main` is the **default branch on GitHub** as of 2026-05-02 (set via `gh repo edit richardthombs/pit2 --default-branch main`).

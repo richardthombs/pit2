@@ -83,3 +83,7 @@ Both must be true. If discovery was cheap, re-discovering it next time costs lit
 ### Pruning
 
 Actively remove entries when they go stale (a file moved, a decision was reversed, a pattern was refactored away). If you notice an entry has been in your memory across several tasks without ever being useful, remove it. A short, accurate memory file is more valuable than a long, cluttered one — every entry has a token cost.
+
+- **After any bug fix:** collapse the bug entry to a single line — "Fixed: [brief description] — [what was done]". Do not retain the full bug narrative once the issue is resolved.
+
+- **Before recording anything:** apply a role-relevance filter. Ask: "Would a future version of me in my specific role actually use this fact?" An engineer's implementation detail does not belong in a documentation steward's memory. A task-specific bead ID does not belong in anyone's memory unless it contains a reusable insight.

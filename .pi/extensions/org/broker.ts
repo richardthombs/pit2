@@ -137,6 +137,9 @@ export class Broker {
 	/** In-memory failure counter per task ID. Reset on broker restart. */
 	private failureCounts = new Map<string, number>();
 
+	/** Per-role memory-phase promise chain — serialises phase-2 memory updates per role. */
+	private memoryPhaseQueue = new Map<string, Promise<void>>();
+
 	/** Maps role slug → dispatch verb used in task brief. */
 	private static readonly ROLE_VERBS: Record<string, string> = {
 		"typescript-engineer": "implement",
@@ -199,6 +202,7 @@ export class Broker {
 		this.active = true;
 		this.activeCwd = cwd;
 		this.failureCounts.clear();
+		this.memoryPhaseQueue.clear();
 		this._schedulePoll();
 		this.onTaskCreated(cwd); // immediate cycle on start
 	}
@@ -240,6 +244,18 @@ export class Broker {
 			this._enqueueWrite(this.activeCwd, () => this._dispatchCycle(this.activeCwd!));
 			this._schedulePoll();
 		}, ms);
+	}
+
+	/**
+	 * Enqueue a memory-update phase on the per-role serialisation chain.
+	 * Ensures only one same-role member runs phase 2 at a time, preventing
+	 * concurrent read-modify-write races on the shared role memory file.
+	 * Errors don't block the chain. Fire-and-forget from the caller's perspective.
+	 */
+	private _enqueueMemoryPhase(roleSlug: string, fn: () => Promise<void>): void {
+		const prior = this.memoryPhaseQueue.get(roleSlug) ?? Promise.resolve();
+		const next = prior.then(fn).catch(() => {});
+		this.memoryPhaseQueue.set(roleSlug, next);
 	}
 
 	/**
@@ -380,21 +396,25 @@ export class Broker {
 			const durationSecs = Math.round((Date.now() - startedAt) / 1000);
 
 			// ── 2b. Memory update phase ────────────────────────────────────────
-			// Capture the task output now; the memory phase must not affect what we deliver.
-			// liveClient is reused from the newSession() lookup above.
-			if (result.exitCode === 0) {
-				if (liveClient) {
+			// Enqueued per role so same-role members don't race on the shared role memory file.
+			// Fire-and-forget — captureResult and deliverResult proceed immediately after enqueue.
+			if (result.exitCode === 0 && liveClient) {
+				const capturedClient = liveClient;
+				const capturedMemberName = r.member.name;
+				const capturedTaskId = task.id;
+				const capturedTaskTitle = task.title;
+				this._enqueueMemoryPhase(role, async () => {
 					try {
-						await liveClient.prompt(
+						await capturedClient.prompt(
 							"Memory update phase: review your memory file and update it if anything from the task you just completed is worth recording. Do not include any other commentary.",
 						);
-						await liveClient.waitForIdle(30_000);
+						await capturedClient.waitForIdle(30_000);
 					} catch (err: any) {
 						this.notifyEM(
-							`Broker: memory update phase failed for ${r.member.name} after task ${task.id} ("${task.title}") — ${err?.message ?? err}`,
+							`Broker: memory update phase failed for ${capturedMemberName} after task ${capturedTaskId} ("${capturedTaskTitle}") — ${err?.message ?? err}`,
 						);
 					}
-				}
+				});
 			}
 
 			// ── 3. Update member state ────────────────────────────────────────────

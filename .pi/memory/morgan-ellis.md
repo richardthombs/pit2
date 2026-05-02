@@ -7,10 +7,11 @@
 - Pure utilities: `.pi/extensions/org/utils.ts` (no pi-runtime deps — safe to test in isolation)
 - Team roster: `.pi/roster.json` (managed via `loadRoster`/`saveRoster`)
 - Agent role definitions: `.pi/agents/<role>.md` (frontmatter + body)
-- Member memory files: `.pi/memory/<member-id>.md` (free-form; owned by the agent itself)
+- Role memory files: `.pi/memory/<role-slug>.md` (shared across all members of a role; owned by the agent)
 
 ### Architecture Notes
-- Memory is per-member (free-form files), not per-role structured blocks
+- Memory is **per-role** (shared file at `.pi/memory/<role-slug>.md`), not per-member — all members of a role read/write the same file
+- `roleMemoryPath(cwd, roleSlug)` is the helper (replaced old `memberMemoryPath`)
 - System prompt per member written to `.pi/prompts/members/<slug>.md` by `buildMemberSystemPromptFile()`
 - Memory template at `.pi/prompts/memory.md` — has `[name]` and `[path]` placeholders; loaded by `runTask()` via `fs.readFileSync` with a hardcoded fallback string if the file is missing
 
@@ -19,8 +20,9 @@
 - Key functions: `getOrCreateClient()`, `stopLiveClient()`, `reapIdleClients()`, `initializeClientMemory()`, `liveMemberKey()`, `memberSystemPromptPath()`
 - `liveMembers` Map holds `LiveMemberEntry` (client + lastUsed timestamp)
 - Memory injected once as first assistant message (`initializeClientMemory`), not on every task
+- `initializeClientMemory()` takes `config: AgentConfig` as 4th param; reads from `roleMemoryPath(cwd, config.name)`
 - Idle reaper: 60s interval, `TASK_IDLE_TIMEOUT_MS = 600_000` (10 min); started in `session_start`, torn down in `session_shutdown`
-- `/fire` and `fire` tool both call `stopLiveClient()` + delete the system prompt file
+- `/fire` and `fire` tool both call `stopLiveClient()` + delete the **system prompt file only** — role memory file is shared and is NOT deleted on fire
 - `RpcClient.newSession(parentSession?)` — sends `{ type: "new_session" }`, returns `{ cancelled: boolean }`. Used by broker to clear context window between tasks. Return value is ignored in broker (non-fatal catch handles errors).
 
 ### Beads Integration — Tool Registration
@@ -43,7 +45,7 @@
 - Deps injected via `broker.configure(...)` — called in `export default fn` in index.ts (9 params total)
 - `broker.configure()` params: `runBd`, `resolveOrScale`, `runTask`, `memberState`, `notifyEM`, `deliverResult(taskId, taskTitle, role, memberName, output)`, `scheduleDoneReset(memberName)`, `accumulateMemberUsage(memberName, usage)`, `getLiveClient(cwd, memberName) => RpcClient | undefined`
 - `broker.start(cwd)` / `broker.stop()` — stop called in `session_shutdown`; start called automatically in `session_start` after `ensureBeadsInit()`
-- `broker.start()` is idempotent: `if (this.active) return;` guard; does NOT update `activeCwd` if already active; clears `failureCounts`
+- `broker.start()` is idempotent: `if (this.active) return;` guard; does NOT update `activeCwd` if already active; clears `failureCounts` and `memoryPhaseQueue`
 - `SYSTEM.md` EM identity is `.pi/SYSTEM.md` (not `.pi/agents/SYSTEM.md`)
 
 ### Broker — Polling & Dispatch
@@ -65,8 +67,10 @@ Where `verb` comes from `Broker.ROLE_VERBS[role] ?? "complete"` (e.g. "test", "i
 
 ### Broker — Two-Phase Execution
 - Phase 1: `runTask()` called with brief → agent produces deliverable; result captured immediately
-- Phase 2 (memory update): if exit code 0 and `liveClient` exists, `liveClient.prompt("Memory update phase: review your memory file and update it if anything from the task you just completed is worth recording. Do not include any other commentary.")` + `waitForIdle(30_000)`. Phase-2 errors are notified but non-fatal.
-- Capture happens between phases — phase-2 output cannot contaminate the delivered result
+- Phase 2 (memory update): fire-and-forget via `_enqueueMemoryPhase(role, fn)` — captureResult/deliverResult proceed without waiting. Errors are notified but non-fatal.
+- `_enqueueMemoryPhase(roleSlug, fn)`: same serialisation pattern as `_enqueueWrite`; per-role chain prevents concurrent read-modify-write races on the shared role memory file
+- `memoryPhaseQueue: Map<string, Promise<void>>` is the per-role chain store; cleared on `broker.start()`
+- Capture happens before phase 2 enqueue — phase-2 output cannot contaminate the delivered result
 
 ### Broker — Failure & Error Handling
 - 3-strike failure policy: on 3rd failure `_requeueTask` sets `--status=deferred`; deferred tasks don't appear in `bd ready` so no repeat `notifyEM` fires
@@ -88,6 +92,12 @@ Where `verb` comes from `Broker.ROLE_VERBS[role] ?? "complete"` (e.g. "test", "i
 - **close_reason formatting sensitivity:** if agent puts word and sentence on same line, entire line becomes `close_reason`. If word is its own paragraph, only the word is captured. Not a code bug — a response-formatting issue.
 - **Double/triple dispatch under load:** concurrent dispatches can stack responses; all append to notes but only the last-to-close sets `close_reason`. Delivered result is usually clean, but capacity waste grows.
 - **File-offload path:** verified working under parallel stress load ✓
+
+### Startup Advisory (session_start)
+- After `broker.start()`, `session_start` scans the roster per-role (deduplicated via a Set)
+- If role memory file does NOT exist but legacy per-member `.pi/memory/<member-id>.md` files do, emits a `warn` notification listing the legacy filenames
+- Uses `fs.existsSync` (synchronous) — safe here since it's a startup scan, not hot path
+- Advisory uses `m.role` directly as the role slug — correct since roster role names are already kebab-case; no normalisation applied (potential future edge case if role names ever deviate)
 
 ### delegate tool removal
 - `delegate` tool, `DelegateParams`, `AssigneeFields`, `asyncMode`, `/async` command removed
