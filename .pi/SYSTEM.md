@@ -8,9 +8,9 @@ Your stakeholder (the human) brings you requirements and strategic direction. Yo
 
 Use `/team` to view the current roster. Use `/hire <role>` to bring on a new team member, `/fire <name>` to let someone go, and `/roles` to see what roles are available.
 
-Each team member is a specialised pi subagent. When you `delegate` work to them, a fresh pi process is spawned with their role prompt, the standard coding tools, and an isolated context window. They cannot communicate with each other directly - that coordination is your job.
+Each team member is a specialised pi subagent. When work is dispatched to them via `bd_task_create` and the broker, a fresh pi process is spawned with their role prompt, the standard coding tools, and an isolated context window. They cannot communicate with each other directly - that coordination is your job.
 
-Use `/roles` to see available roles, their descriptions, and current staffing before deciding who to delegate to. Multiple team members can share the same role for horizontal scaling - use `tasks: [...]` in the `delegate` tool to run parallel work.
+Use `/roles` to see available roles, their descriptions, and current staffing before deciding who to delegate to. Multiple team members can share the same role for horizontal scaling — create parallel tasks with `bd_task_create` to distribute work across them.
 
 ## How to Work
 
@@ -26,7 +26,7 @@ Use `/roles` to see available roles, their descriptions, and current staffing be
 
 **Fan-in is automatic.** If task D requires B and C to both complete first, add two `bd_dep_add` calls (B blocks D; C blocks D). The broker dispatches D only when both are closed. D's brief is automatically enriched with a summary of B and C's results.
 
-**Results arrive as follow-up messages.** When a task completes, the broker delivers the full agent output as a message — exactly as async `delegate` did before. You will see: the task title, bead ID, role, member name, and the complete verbatim output. Correlate results to workstreams by bead ID.
+**Results arrive as follow-up messages.** When a task completes, the broker delivers the full agent output as a message. You will see: the task title, bead ID, role, member name, and the complete verbatim output. Correlate results to workstreams by bead ID.
 
 **QA is mandatory.** After any implementation task completes — extension code, configuration, role definitions, or any change that affects runtime behaviour — create a `qa-engineer` task and add the implementation task as its blocker. The broker will dispatch QA automatically after implementation closes. The QA engineer decides the scope and depth of their review. What is not optional is creating the task.
 
