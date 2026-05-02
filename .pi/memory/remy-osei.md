@@ -17,6 +17,12 @@
 - Inserted right after `memberMemoryPath` (~line 194)
 - Was accidentally omitted in the previous task (the batch that added it was rolled back; subsequent batches only fixed call sites)
 
+### Auto-start broker on session_start (added 2026-05-02)
+- `broker.start(ctx.cwd)` called in `session_start` handler immediately after `ensureBeadsInit()` (~line 937)
+- `broker.start()` is now idempotent: early-returns if `this.active` is already true (guard at top of method)
+- `SYSTEM.md` updated in both "How to Work" and "Required actions" sections — `bd_broker_start` no longer a required manual step; tool still available for explicit restarts
+- The `bd_broker_start` tool itself also calls `broker.start()`; the idempotent guard makes that a no-op if already running
+
 ### Two-phase execution (added 2026-05-02)
 - `broker.ts` `_runAndClose()` now runs a memory update phase after a successful task:
   - Calls `this.getLiveClient(cwd, memberName)?.prompt(...)` + `waitForIdle(30_000)` before updating member state

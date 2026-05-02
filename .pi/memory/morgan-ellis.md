@@ -36,7 +36,8 @@
 ### Beads Integration B — Broker (branch: beads-integration)
 - `broker.ts` exports `Broker` class + module-level singleton (`export const broker = new Broker()`)
 - Deps injected via `broker.configure(runBd, resolveOrScale, runTask, memberState, notifyEM)` — called in `export default fn` in index.ts
-- `broker.start(cwd)` / `broker.stop()` — stop called in `session_shutdown`
+- `broker.start(cwd)` / `broker.stop()` — stop called in `session_shutdown`; start now also called automatically in `session_start` after `ensureBeadsInit()`
+- `broker.start()` is idempotent: `if (this.active) return;` guard as first line — safe to call multiple times; does NOT update `activeCwd` if already active
 - `_enqueueWrite(cwd, fn)` serialises all bd writes per-cwd; stores `next.catch(() => {})` to keep chain alive
 - `buildUpstreamContext` is now a `private` method on `Broker` class (was previously module-level export)
 - `resolveOrScale` has 4 params: `(cwd, memberState, memberName|undefined, roleName|undefined)` — no `liveMembers` param (dead param was removed); loads roster internally
@@ -52,7 +53,7 @@
 ### Broker Callback Wiring — broker-only dispatch change (reviewed)
 - `Broker.configure()` now has 8 params: original 5 + `deliverResult(taskId, taskTitle, role, memberName, output)`, `scheduleDoneReset(memberName)`, `accumulateMemberUsage(memberName, usage)`
 - `deliverResult` format: `` **Task completed: ${taskTitle}**\nBead `${taskId}` · Role: ${role} · Member: ${memberName}\n\n${output} ``
-- Old module-level `deliverResult(memberName, roleName, content)` still present in index.ts — used by `delegate` async paths; different message format. Divergence is intentional until delegate is removed.
+- Old module-level `deliverResult` was removed along with delegate tool (see delegate tool removal section)
 - `RunTaskFn` in broker.ts is 4-arg only — no signal/onProgress; broker-dispatched tasks cannot be cancelled via abort signal (pre-existing limitation)
 - `SYSTEM.md` EM identity is `.pi/SYSTEM.md` (not `.pi/agents/SYSTEM.md`)
 
