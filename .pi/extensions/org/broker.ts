@@ -281,6 +281,10 @@ export class Broker {
 			if (!role) continue;
 
 			// Already claimed by a previous dispatch cycle (in_progress).
+			// Note: liveKeys.delete fires in _runAndClose's finally block, after
+			// _enqueueWrite(captureResult) is called — so captureResult is always
+			// ahead of any new dispatch cycle in the write queue. A task can only
+			// re-appear in bd ready after _requeueTask intentionally re-opens it.
 			if (this.liveKeys.has(task.id)) continue;
 
 			// Hard-stop after 3 failures to prevent infinite retry loops.
@@ -297,6 +301,11 @@ export class Broker {
 			if ("error" in r) continue; // no available member; try next cycle
 
 			// Claim before dispatch so that subsequent cycles skip this task.
+			// Race-condition note: _dispatchCycle is serialised through writeQueue, so
+			// two cycles can never run concurrently. Within a single cycle the for-loop
+			// is sequential (each resolveOrScale + runBd is awaited before the next
+			// iteration). Therefore liveKeys.add always precedes the next cycle's
+			// liveKeys.has check; double-dispatch at the TypeScript level is not possible.
 			this.liveKeys.add(task.id);
 			try {
 				await this.runBd(cwd, ["update", task.id, "--status=in_progress", "--json"]);
@@ -356,14 +365,44 @@ export class Broker {
 			].join("\n");
 			if (upstreamContext) brief += `\n\n${upstreamContext}`;
 
-			// ── 2. Snapshot git HEAD, run task ────────────────────────────────────
+			// ── 1b. Clear previous session context ──────────────────────────────────
+			// Call newSession() before each task so the member starts with a clean
+			// context window rather than seeing the prior task's conversation.
+			// Non-fatal: if it fails, proceed with the existing session.
+			const liveClientForReset = this.getLiveClient(cwd, r.member.name);
+			if (liveClientForReset) {
+				try {
+					await liveClientForReset.newSession();
+				} catch (err: any) {
+					this.notifyEM(
+						`Broker: newSession() failed for ${r.member.name} (task ${task.id}) — proceeding with existing session: ${err?.message ?? err}`,
+					);
+				}
+			}
+
+	// ── 2. Snapshot git HEAD; clear prior context; run task ─────────────────
+			// newSession() wipes the conversation window so the member sees only the
+			// new brief — not residue from their previous task. Memory-file continuity
+			// is handled by the system-prompt injection at session start, so clearing
+			// the context window is safe. If newSession() fails we proceed with the
+			// existing session rather than failing the task.
 			const commitBefore = await getHeadCommit(cwd);
+			const liveClient = this.getLiveClient(cwd, r.member.name);
+			if (liveClient) {
+				try {
+					await liveClient.newSession();
+				} catch (err: any) {
+					this.notifyEM(
+						`Broker: newSession() failed for ${r.member.name} before task ${task.id} — proceeding with existing session. ${err?.message ?? err}`,
+					);
+				}
+			}
 			const result = await this.runTask(r.config, r.member.name, brief, cwd);
 
 			// ── 2b. Memory update phase ────────────────────────────────────────
 			// Capture the task output now; the memory phase must not affect what we deliver.
+			// liveClient is reused from the newSession() lookup above.
 			if (result.exitCode === 0) {
-				const liveClient = this.getLiveClient(cwd, r.member.name);
 				if (liveClient) {
 					try {
 						await liveClient.prompt(
@@ -444,6 +483,18 @@ export class Broker {
 		output: string,
 		commitBefore: string | null,
 	): Promise<void> {
+		// Bug 2 guard: if the bead is already correctly closed (e.g. from a prior
+		// attempt), skip all writes to avoid overwriting a correct deliverable.
+		try {
+			const { stdout: guardOut } = await this.runBd(cwd, ["show", taskId, "--json"]);
+			const guardTask = (JSON.parse(guardOut) as any[])[0];
+			if (guardTask?.status === "closed" && guardTask?.close_reason) {
+				return;
+			}
+		} catch {
+			// Cannot determine current status — proceed with normal flow.
+		}
+
 		// Snapshot git HEAD now (task has already completed by the time this runs).
 		const commitAfter = await getHeadCommit(cwd);
 		const isFileChange = commitAfter !== null && commitAfter !== commitBefore;
@@ -504,12 +555,20 @@ export class Broker {
 		}
 
 		// Always close with a one-line human-readable summary.
-		await this.runBd(cwd, [
-			"close",
-			taskId,
-			`--reason=${summarise(output)}`,
-			"--json",
-		]);
+		// Bug 1: if bd close reports "not found", the task was already closed by a
+		// prior attempt — treat that as success rather than triggering error recovery.
+		try {
+			await this.runBd(cwd, [
+				"close",
+				taskId,
+				`--reason=${summarise(output)}`,
+				"--json",
+			]);
+		} catch (err: any) {
+			const msg = (err?.message ?? String(err)).toLowerCase();
+			if (!msg.includes("not found")) throw err;
+			// "not found" → task already closed; treat as success.
+		}
 	}
 
 	/**
