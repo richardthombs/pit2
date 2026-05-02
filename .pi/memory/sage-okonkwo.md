@@ -5,10 +5,12 @@
 ### Broker (`/.pi/extensions/org/broker.ts`) — as of spec-delegate-via-broker.md §2 & §3 implementation
 
 - **Sole write serialiser**: all `bd` writes go through `_enqueueWrite` → per-cwd promise chain (`writeQueue`). The chain's `.catch(() => {})` swallows errors to keep the chain alive — this means lambdas passed to `_enqueueWrite` must handle their own errors if surfacing them matters.
-- **`captureResult` branching** (as of the bug-fix commit):
+- **`captureResult` branching** (as of pit2-9zf bug-fix):
+  0. **Already-closed guard**: first `bd show` the task — if `status === "closed"` and `close_reason` is non-empty, return silently (prevents retry/recovery from overwriting a correct deliverable). If `bd show` fails, proceed normally.
   1. File-change (new git commit): record SHA in metadata.
-  2. Text output: first fetch current notes length via `bd show <id> --json` → compute `remaining = 50_000 - currentNotesLength`. If `output.length <= TEXT_CAP (40 KB) && output.length <= remaining` → append notes. Otherwise → file-offload to `.pi/task-results/<id>.md` + metadata.result_file.
+  2. Text output: fetch current notes length via `bd show <id> --json` → compute `remaining = 50_000 - currentNotesLength`. If `output.length <= TEXT_CAP (40 KB) && output.length <= remaining` → append notes. Otherwise → file-offload to `.pi/task-results/<id>.md` + metadata.result_file.
   3. If `bd show` fails → `remaining = 0` → always file-offload (safe fallback).
+  4. **`bd close` "not found" swallowed**: the final `bd close` call is wrapped in try/catch; if the error message contains "not found" it is treated as success (task was already closed). Other errors still propagate.
 - **`bd show --json` response shape**: returns an array; use `(JSON.parse(stdout) as any[])[0]`. Notes are at `.notes` (string | null | undefined).
 - **Failure counter** (`failureCounts`): in-memory per task ID, hard-stops at 3. Cleared on `broker.start()`. Third failure defers the task instead of re-opening it.
 - **`_runAndClose`** runs outside the write queue (agents execute in parallel); results are re-enqueued via `_enqueueWrite` only for the bd write step.
@@ -18,4 +20,4 @@
 - **`delegate` tool removed** (spec §3 complete). Also removed: `asyncMode`, `AssigneeFields`, `DelegateParams`, `/async` command, `deliverResult` function. File truncated to 1533 lines.
 
 ### Patterns
-- `tsc --noEmit --strict --target ES2022 --module NodeNext --moduleResolution NodeNext --skipLibCheck <file>` works for quick TS validation without a tsconfig.
+- `tsc --noEmit --strict --target ES2022 --module NodeNext --moduleResolution NodeNext --skipLibCheck <file>` nominally works for quick TS validation, but always errors on `@mariozechner/pi-coding-agent` (module not in local node_modules). Pre-existing errors in `index.ts` also surface. Use the check only to catch new syntax/type errors introduced by edits, not as a clean-pass gate.

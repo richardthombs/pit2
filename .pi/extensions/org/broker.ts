@@ -365,22 +365,7 @@ export class Broker {
 			].join("\n");
 			if (upstreamContext) brief += `\n\n${upstreamContext}`;
 
-			// ── 1b. Clear previous session context ──────────────────────────────────
-			// Call newSession() before each task so the member starts with a clean
-			// context window rather than seeing the prior task's conversation.
-			// Non-fatal: if it fails, proceed with the existing session.
-			const liveClientForReset = this.getLiveClient(cwd, r.member.name);
-			if (liveClientForReset) {
-				try {
-					await liveClientForReset.newSession();
-				} catch (err: any) {
-					this.notifyEM(
-						`Broker: newSession() failed for ${r.member.name} (task ${task.id}) — proceeding with existing session: ${err?.message ?? err}`,
-					);
-				}
-			}
-
-	// ── 2. Snapshot git HEAD; clear prior context; run task ─────────────────
+			// ── 2. Snapshot git HEAD; clear prior context; run task ─────────────────
 			// newSession() wipes the conversation window so the member sees only the
 			// new brief — not residue from their previous task. Memory-file continuity
 			// is handled by the system-prompt injection at session start, so clearing

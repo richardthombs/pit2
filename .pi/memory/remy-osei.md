@@ -23,6 +23,12 @@
 - `SYSTEM.md` updated in both "How to Work" and "Required actions" sections — `bd_broker_start` no longer a required manual step; tool still available for explicit restarts
 - The `bd_broker_start` tool itself also calls `broker.start()`; the idempotent guard makes that a no-op if already running
 
+### `newSession()` before each task dispatch (added 2026-05-02)
+- `_runAndClose()` calls `liveClient.newSession()` after building the brief, before `runTask()`
+- `liveClient` is hoisted before the newSession() call and reused in the memory-update phase (step 2b) — single `getLiveClient()` lookup for both
+- Wrapped in try/catch — failure logs via `notifyEM` but never blocks dispatch
+- `liveKeys` race was investigated: write-queue serialisation + sequential for-loop already prevents double-dispatch; no structural change needed (comment added at guard site documenting the reasoning)
+
 ### Two-phase execution (added 2026-05-02)
 - `broker.ts` `_runAndClose()` now runs a memory update phase after a successful task:
   - Calls `this.getLiveClient(cwd, memberName)?.prompt(...)` + `waitForIdle(30_000)` before updating member state
@@ -44,4 +50,5 @@
 - `RpcClient` is imported from `@mariozechner/pi-coding-agent`
 - `client.getSessionStats()` returns an object with `contextUsage?.percent` (number | undefined)
 - `client.prompt(msg)` sends a message; `client.waitForIdle(timeoutMs)` waits for completion
+- `client.newSession()` clears the conversation window while keeping the RpcClient process alive
 - `null` is used in `memberState.contextPct` to mean "model doesn't report context usage"; `undefined` means "not yet polled"

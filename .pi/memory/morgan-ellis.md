@@ -21,6 +21,7 @@
 - Memory injected once as first assistant message (`initializeClientMemory`), not on every task
 - Idle reaper: 60s interval, `TASK_IDLE_TIMEOUT_MS = 600_000` (10 min); started in `session_start`, torn down in `session_shutdown`
 - `/fire` and `fire` tool both call `stopLiveClient()` + delete the system prompt file
+- `RpcClient.newSession(parentSession?)` — sends `{ type: "new_session" }`, returns `{ cancelled: boolean }`. Used by broker to clear context window between tasks. Return value is ignored in broker (non-fatal catch handles errors).
 
 ### Beads Integration A — merged (branch: beads-integration)
 - `runBd()` helper: `execFile` with `BEADS_DIR=<cwd>/.beads` env, `timeout: 15_000`
@@ -50,11 +51,14 @@
 - `onTaskUpdated` has extra `taskId` param vs design spec — both call site and handler are consistent
 - `captureResult` Fix: `remaining` initialised to `0` before try; silent catch forces file-offload on `bd show` failure; both `TEXT_CAP` and `remaining` gates required for notes append — reviewed & confirmed correct
 - `captureResult` Fix: `.catch(notifyEM)` on captureResult inside `_enqueueWrite` fires before the chain's blanket swallower — reviewed & confirmed correct
+- ~~Residual gap D (error-recovery overwrite)~~ — FIXED (commit a53d534): guard at top of `captureResult` does `bd show` and returns early if `status === "closed" && close_reason` truthy; `bd close` "not found" errors now swallowed (treated as success). `newSession()` also called before each task dispatch to clear prior context window (addresses gap B).
+- ~~Duplicate `newSession()` calls~~ — FIXED: "1b" block (`liveClientForReset`) removed; single `liveClient.newSession()` call remains before `runTask`.
 - Pre-existing (not fixed): `--append-notes=VALUE` (single arg) in text-fit path vs `--append-notes` + VALUE (two args) in file-offload path — format inconsistency
 - Pre-existing (not fixed): two sequential `bd update` calls in file-offload path not atomic; partial failure leaves notes/metadata inconsistent
 
 ### Broker Callback Wiring — broker-only dispatch change (reviewed)
-- `Broker.configure()` now has 8 params: original 5 + `deliverResult(taskId, taskTitle, role, memberName, output)`, `scheduleDoneReset(memberName)`, `accumulateMemberUsage(memberName, usage)`
+- `Broker.configure()` now has 9 params: original 5 + `deliverResult(taskId, taskTitle, role, memberName, output)`, `scheduleDoneReset(memberName)`, `accumulateMemberUsage(memberName, usage)`, `getLiveClient(cwd, memberName) => RpcClient | undefined`
+- `getLiveClient` wired in index.ts as `(cwd, memberName) => liveMembers.get(liveMemberKey(cwd, memberName))?.client`
 - `deliverResult` format: `` **Task completed: ${taskTitle}**\nBead `${taskId}` · Role: ${role} · Member: ${memberName}\n\n${output} ``
 - Old module-level `deliverResult` was removed along with delegate tool (see delegate tool removal section)
 - `RunTaskFn` in broker.ts is 4-arg only — no signal/onProgress; broker-dispatched tasks cannot be cancelled via abort signal (pre-existing limitation)
@@ -86,7 +90,7 @@
 - **Residual gap A (pit2-3jx):** two-phase fix guards against agent's own memory-update prose, but NOT against upstream task output appearing at the top of the assistant response window. In pit2-3jx.3, notes opened with `**Persistent**` (matching .1's output) before the agent's own "cleansing" answer; `close_reason` captured the contaminated prefix. Root cause: prior task output bleeding into the agent's context/response, not the agent's own memory phase.
 - **Residual gap B (pit2-52r — parallel stress):** under 25-task parallel load, broker dispatched multiple tasks to the same member sequentially; prior task's result remained in the context window. In pit2-52r.3, agent produced cross-agent commentary as its phase-1 first message — captured verbatim as `close_reason`. Two-phase fix cannot help when phase-1 itself is contaminated by prior task context. Confirmed again in pit2-52r.17: notes showed three injections of "Profound" (from .16 context), but close_reason was correctly captured as "Ineffable" — two-phase capture held despite note contamination.
 - **Residual gap C (pit2-52r — double/triple dispatch):** pit2-52r.1 notes contained two stacked responses (double dispatch); pit2-52r.17 (Sam Chen / pi-specialist) contained three stacked responses (triple dispatch) on the same stress run. Pattern: dispatches 2+ append to notes but bead close race means only the Nth-to-close dispatch sets `close_reason`. Delivered word was clean in both cases but capacity waste is significant and worsening.
-- **Residual gap D (pit2-52r.11 — error-recovery overwrite):** broker's `bd close` race condition triggered error notification; EM dispatched a recovery/investigation task reusing the *same bead ID*; `captureResult` for the investigation run overwrote `close_reason: "Majestic."` with investigative prose. Correct deliverable only recoverable from embedded notes text. Root cause: reuse of same bead for recovery tasks + unconditional close_reason write in `captureResult`. Fix directions: (a) don't reuse closed bead for recovery tasks, or (b) guard `captureResult` against overwriting an already-valid close_reason.
+- ~~**Residual gap D** (error-recovery overwrite)~~ — FIXED in commit a53d534 (see captureResult notes above). The `bd close` race condition is also fixed via "not found" catch.
 - **File-offload path verified (pit2-52r.14):** result written to `.pi/task-results/<bead-id>.md`, notes = `[Full output written to file — see metadata.result_file]`, metadata.result_file set correctly. Works under parallel stress load. ✓
 
 ### beads CLI flag gotcha
