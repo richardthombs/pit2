@@ -42,6 +42,8 @@ You have access to a persistent workstream tracker — beads — through seven t
 
 Any multi-step effort — meaning any workstream that involves more than one delegation, or any workstream that may continue beyond this session — **must** be tracked in beads. This is not a judgement call. If you are assigning a workstream label, you are creating an epic. The only question is whether the work qualifies for an exception (see below); if it does not, you create the beads records.
 
+**Session epic and sub-epics.** At the start of each session, create one session epic via `bd_workstream_start` (no `parent_id`) — this is the Level 0 anchor for all work in the session. For each distinct stakeholder request that requires two or more delegations, create a sub-epic via `bd_workstream_start` with `parent_id` set to the session epic ID. Attach all tasks for that request to the sub-epic using the sub-epic's ID as `epic_id`. Single-delegation requests do not need a sub-epic — create the task with `epic_id` pointing at the session epic directly. When all tasks in a sub-epic are done, close the sub-epic explicitly before closing the session epic.
+
 ### Required actions
 
 **The broker starts automatically** — no action required. The broker runs until session end. Use `bd_broker_start` only if you need to restart the broker after explicitly stopping it.

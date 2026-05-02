@@ -49,12 +49,6 @@
       "hiredAt": "2026-05-01T22:02:46.756Z"
     },
     {
-      "id": "kendall-mbeki",
-      "name": "Kendall Mbeki",
-      "role": "software-architect",
-      "hiredAt": "2026-05-02T08:17:36.471Z"
-    },
-    {
       "id": "emery-vidal",
       "name": "Emery Vidal",
       "role": "software-architect",
@@ -71,6 +65,12 @@
       "name": "Jesse Andersen",
       "role": "typescript-engineer",
       "hiredAt": "2026-05-02T12:06:46.535Z"
+    },
+    {
+      "id": "hayden-yamamoto",
+      "name": "Hayden Yamamoto",
+      "role": "software-architect",
+      "hiredAt": "2026-05-02T13:25:55.966Z"
     }
   ],
   "usedNames": [
@@ -94,6 +94,7 @@
     "Kendall Mbeki",
     "Emery Vidal",
     "Blake O'Brien",
-    "Jesse Andersen"
+    "Jesse Andersen",
+    "Hayden Yamamoto"
   ]
 }

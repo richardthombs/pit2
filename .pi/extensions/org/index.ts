@@ -68,8 +68,9 @@ interface BeadItem {
 }
 
 interface BeadsTreeNode {
-	epic: BeadItem;
-	tasks: BeadItem[];
+	bead: BeadItem;            // the epic itself
+	children: BeadsTreeNode[]; // sub-epics with their own children
+	tasks: BeadItem[];         // tasks directly under this epic
 }
 
 interface BeadsTree {
@@ -607,16 +608,26 @@ function buildBeadsTree(items: BeadItem[]): BeadsTree {
 	const tasks = items.filter(x => x.issue_type === "task");
 	const epicIds = new Set(epics.map(e => e.id));
 
-	const nodes: BeadsTreeNode[] = epics.map(epic => ({
-		epic,
-		tasks: tasks.filter(t => t.parent === epic.id),
-	}));
+	function buildNode(epic: BeadItem): BeadsTreeNode {
+		const childEpics = epics.filter(e => e.parent === epic.id);
+		return {
+			bead: epic,
+			children: childEpics.map(buildNode),
+			tasks: tasks.filter(t => t.parent === epic.id),
+		};
+	}
 
-	nodes.sort((a, b) => {
-		const aActive = a.epic.status === "in_progress" || a.tasks.some(t => t.status === "in_progress");
-		const bActive = b.epic.status === "in_progress" || b.tasks.some(t => t.status === "in_progress");
-		return (bActive ? 1 : 0) - (aActive ? 1 : 0);
-	});
+	function isNodeActive(node: BeadsTreeNode): boolean {
+		return node.bead.status === "in_progress" ||
+			node.tasks.some(t => t.status === "in_progress") ||
+			node.children.some(c => isNodeActive(c));
+	}
+
+	// Root epics: those whose parent is not in the current epic list
+	const rootEpics = epics.filter(e => !e.parent || !epicIds.has(e.parent));
+	const nodes = rootEpics.map(buildNode);
+
+	nodes.sort((a, b) => (isNodeActive(b) ? 1 : 0) - (isNodeActive(a) ? 1 : 0));
 
 	const orphans = tasks.filter(t => !t.parent || !epicIds.has(t.parent));
 
@@ -936,11 +947,17 @@ export default function (pi: ExtensionAPI) {
 		if (width < 30) return [];
 		const { nodes, orphans } = cachedBeadsTree;
 		const lines: string[] = [];
+		const MAX_DEPTH = 4;
+
+		function isNodeActive(node: BeadsTreeNode): boolean {
+			return node.bead.status === "in_progress" ||
+				node.tasks.some(t => t.status === "in_progress") ||
+				node.children.some(c => isNodeActive(c));
+		}
 
 		const activeCount =
-			nodes.filter(n =>
-				n.epic.status === "in_progress" || n.tasks.some(t => t.status === "in_progress")
-			).length + orphans.filter(t => t.status === "in_progress").length;
+			nodes.filter(n => isNodeActive(n)).length +
+			orphans.filter(t => t.status === "in_progress").length;
 		const totalEpics = nodes.length;
 		lines.push(truncateToWidth(
 			`  ◈ Workstreams (${totalEpics} epic${totalEpics !== 1 ? "s" : ""} · ${activeCount} active)`,
@@ -952,29 +969,47 @@ export default function (pi: ExtensionAPI) {
 			return lines;
 		}
 
-		nodes.forEach((node, nodeIdx) => {
-			const isLastTop = nodeIdx === nodes.length - 1 && orphans.length === 0;
-			const epicConnector = isLastTop ? "  └─ " : "  ├─ ";
-			const epicSymbol =
-				node.epic.status === "in_progress" || node.tasks.some(t => t.status === "in_progress")
-					? "●" : "○";
-			const epicBase = `${epicConnector}${epicSymbol} ${node.epic.id}  `;
+		// Recursive renderer — indentStr is the prefix before the connector chars
+		function renderNode(node: BeadsTreeNode, indentStr: string, isLast: boolean, depth: number): void {
+			if (depth > MAX_DEPTH) return;
+
+			const connector = isLast ? "└─ " : "├─ ";
+			const epicSymbol = isNodeActive(node) ? "●" : "○";
+			const epicBase = `${indentStr}${connector}${epicSymbol} ${node.bead.id}  `;
 			const epicTitleAvail = Math.max(0, width - epicBase.length);
-			const epicTitleStr = epicTitleAvail > 3 ? truncateToWidth(node.epic.title, epicTitleAvail) : "";
+			const epicTitleStr = epicTitleAvail > 3 ? truncateToWidth(node.bead.title, epicTitleAvail) : "";
 			lines.push(truncateToWidth(`${epicBase}${epicTitleStr}`, width));
 
-			const childContinue = isLastTop ? "      " : "  │   ";
-			node.tasks.forEach((task, taskIdx) => {
-				const isLastTask = taskIdx === node.tasks.length - 1;
-				const taskConnector = isLastTask ? "└─ " : "├─ ";
+			// Indent for children: continue the tree line if this node is not last
+			const childIndent = indentStr + (isLast ? "    " : "│   ");
+
+			// Render sub-epics first, then tasks; determine isLast across both groups
+			const totalItems = node.children.length + node.tasks.length;
+			let itemIdx = 0;
+
+			node.children.forEach((child) => {
+				const childIsLast = itemIdx === totalItems - 1;
+				renderNode(child, childIndent, childIsLast, depth + 1);
+				itemIdx++;
+			});
+
+			node.tasks.forEach((task) => {
+				const taskIsLast = itemIdx === totalItems - 1;
+				const taskConnector = taskIsLast ? "└─ " : "├─ ";
 				const taskSymbol = task.status === "in_progress" ? "●" : "○";
 				const member = task.status === "in_progress" ? (task.assignee ?? memberForBead(task.id)) : null;
 				const memberSuffix = member ? `  ${member}` : "";
-				const taskBase = `${childContinue}${taskConnector}${taskSymbol} ${task.id}  `;
+				const taskBase = `${childIndent}${taskConnector}${taskSymbol} ${task.id}  `;
 				const taskTitleAvail = Math.max(0, width - taskBase.length - memberSuffix.length);
 				const taskTitleStr = taskTitleAvail > 3 ? truncateToWidth(task.title, taskTitleAvail) : "";
 				lines.push(truncateToWidth(`${taskBase}${taskTitleStr}${memberSuffix}`, width));
+				itemIdx++;
 			});
+		}
+
+		nodes.forEach((node, nodeIdx) => {
+			const isLastNode = nodeIdx === nodes.length - 1 && orphans.length === 0;
+			renderNode(node, "  ", isLastNode, 0);
 		});
 
 		if (orphans.length > 0) {
@@ -1381,12 +1416,15 @@ export default function (pi: ExtensionAPI) {
 			design: Type.Optional(Type.String({
 				description: "Rationale for why this workstream is being started; the decision or requirement that prompted it.",
 			})),
+			parent_id: Type.Optional(Type.String({ description: 'Parent epic ID — creates a sub-epic under this epic' })),
 		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			const guard = beadsGuard(ctx.cwd);
 			if (guard) return guard;
 
-			const args = ["create", params.title, "--type=epic", "--json"];
+			const args = ["create", params.title, "--type=epic"];
+			if (params.parent_id) args.push(`--parent=${params.parent_id}`);
+			args.push("--json");
 			if (params.design) args.push(`--design=${params.design}`);
 
 			try {
@@ -1539,6 +1577,7 @@ export default function (pi: ExtensionAPI) {
 			blocked_id: Type.String({
 				description: "ID of the task that cannot start until blocker_id is done.",
 			}),
+			type: Type.Optional(Type.Union([Type.Literal('blocks'), Type.Literal('parent-child')], { description: 'Dependency type — blocks (default) or parent-child' })),
 		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			const guard = beadsGuard(ctx.cwd);
@@ -1546,7 +1585,7 @@ export default function (pi: ExtensionAPI) {
 
 			try {
 				// Argument order: bd dep add <blocked> <blocker> — first arg is the dependent task
-				await runBd(ctx.cwd, ["dep", "add", params.blocked_id, params.blocker_id, "--type=blocks"]);
+				await runBd(ctx.cwd, ["dep", "add", params.blocked_id, params.blocker_id, `--type=${params.type ?? 'blocks'}`]);
 				return {
 					content: [{ type: "text", text: `Dependency added: ${params.blocker_id} blocks ${params.blocked_id}` }],
 					details: { blocker: params.blocker_id, blocked: params.blocked_id },
