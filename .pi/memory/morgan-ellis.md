@@ -44,6 +44,10 @@
 - ~~`failureCounts` not reset on `broker.start()`~~ — FIXED: `start()` calls `this.failureCounts.clear()`
 - `captureResult` closes AFTER artifact capture (spec pseudocode says close-then-capture, impl is safer)
 - `onTaskUpdated` has extra `taskId` param vs design spec — both call site and handler are consistent
+- `captureResult` Fix: `remaining` initialised to `0` before try; silent catch forces file-offload on `bd show` failure; both `TEXT_CAP` and `remaining` gates required for notes append — reviewed & confirmed correct
+- `captureResult` Fix: `.catch(notifyEM)` on captureResult inside `_enqueueWrite` fires before the chain's blanket swallower — reviewed & confirmed correct
+- Pre-existing (not fixed): `--append-notes=VALUE` (single arg) in text-fit path vs `--append-notes` + VALUE (two args) in file-offload path — format inconsistency
+- Pre-existing (not fixed): two sequential `bd update` calls in file-offload path not atomic; partial failure leaves notes/metadata inconsistent
 
 ### Context Usage Polling
 - `runTaskWithStreaming` captures `contextPct` post-task via `entry.client.getSessionStats()`

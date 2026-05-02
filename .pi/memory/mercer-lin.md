@@ -102,40 +102,46 @@
 
 ## Storage Capabilities (Verified Against Schema + Source)
 
-### Field size limits (from `0001_create_issues.up.sql`)
-- `notes TEXT` → **64KB hard cap** (MySQL TEXT type = 65,535 bytes). No app-level check; ceiling is enforced by Dolt only.
-- `description TEXT`, `design TEXT`, `acceptance_criteria TEXT` → same 64KB cap
-- `external_ref VARCHAR(255)` → 255 bytes; indexed; for short external refs ("gh-123", URLs)
-- `spec_id VARCHAR(1024)` → 1KB; indexed; for specification document links
-- `metadata JSON` → effectively unlimited (~1GB, stored as LONGBLOB in Dolt)
-- `title VARCHAR(500)` → 500 chars; enforced at application level in `types.go Validate()`
+### Storage schema — confirmed against source (migration path: `internal/storage/schema/migrations/`)
 
-### `--append-notes` is NOT uncapped
-- Implemented as pure string concat in `update.go` with **zero length check** before DB write
-- The ceiling is Dolt's TEXT column limit (64KB), not an app-level guard
-- Hitting the cap will produce a Dolt error, not a clean beads error
+**`issues` table TEXT fields (all 64KB Dolt-enforced, zero app-level length check except title):**
+- `title VARCHAR(500) NOT NULL` → app-enforced: required + max 500 chars in `Validate()`
+- `description TEXT NOT NULL` → 64KB, no app check
+- `design TEXT NOT NULL` → 64KB, no app check
+- `acceptance_criteria TEXT NOT NULL` → 64KB, no app check
+- `notes TEXT NOT NULL` → 64KB, no app check; `--append-notes` does NOT pre-check length before DB write
+- `close_reason TEXT DEFAULT ''` → 64KB, no max app check; `validation.on-close` only warns on short reasons
+- `payload TEXT DEFAULT ''` → 64KB; for `type=event` audit beads
+- `waiters TEXT DEFAULT ''` → 64KB; comma-separated mail addresses for gate notifications
+- `external_ref VARCHAR(255)` → 255 chars; indexed; no app check
+- `spec_id VARCHAR(1024)` → 1KB; indexed; no app check
+- `metadata JSON` → ~1GB (LONGBLOB in Dolt); **must be valid JSON** (json.Valid check in Validate())
+- `source_repo VARCHAR(512)` → 512 chars; internal routing, not synced
 
-### `bd close --reason` length (OQ-4, verified close.go)
-- **No application-level character limit on `--reason`**
-- Only ceiling is the DB `close_reason TEXT` column = **64KB** (Dolt-enforced only)
-- `validation.on-close` config (default `"none"`) can warn/error on **short** reasons (<20 chars) — not a max cap
-- `--reason-file` flag reads reason from file/stdin — useful for structured broker close summaries
-- The reason string passes directly to `store.CloseIssue()` with zero length check
+**`comments` table:**
+- `text TEXT NOT NULL` → 64KB; required (NOT NULL); no app length check
+- `author VARCHAR(255) NOT NULL` → 255 chars; required
 
-### No attachment mechanism
-- No `bd attach` command; no attachment table in any of the 32 schema migrations
-- beads is not an artifact store
+**`dependencies` table:**
+- `metadata JSON` → ~1GB; no app validation
+- `thread_id VARCHAR(255)` → 255 chars; groups replies-to edges
 
-### `metadata JSON` is the right field for artefact references
-- Go type comment: "tool annotations, file lists, etc." — explicitly designed for this use
-- Supports incremental edits: `--set-metadata key=value`, `--unset-metadata key`
-- `bd show --json` returns full metadata verbatim (no truncation anywhere in JSON path)
-- Pattern for Integration B: agent writes artifact to file/git, stores ref in metadata:
-  `bd update <id> --set-metadata result_file=/path/to/result.json --set-metadata git_commit=<sha>`
+**Critical gotchas:**
+- `--append-notes` is pure string concat; no pre-write length check; hits 64KB silently
+- `title` is the ONLY field with bilateral app enforcement (required + max 500)
+- `metadata` is the only practically unlimited field → use it for artifact refs, not notes
+- `source_formula` and `source_location` are in types.go but NOT in 0001 migration — added by later ALTER TABLE; short internal strings
+- Migrations live at `internal/storage/schema/migrations/` (NOT `cmd/bd/store/migrations/`)
 
-### `bd show --json` — no truncation
-- JSON path in `show.go` serialises full `IssueDetails` struct with `outputJSON(allDetails)` — no truncation, pagination, or max-length check anywhere
-- Full `notes`, `metadata`, `description`, etc. returned verbatim
+## broker.ts — Notes Ceiling Bug (Verified Against Source)
+
+- File: `/Users/richardthombs/dev/pit2/.pi/extensions/org/broker.ts`
+- `TEXT_CAP = 40 * 1024` (40 KB) — guards **output size only**; does NOT fetch existing `notes` length before `--append-notes`
+- **Risk**: on a successful retry, `existing_notes + new_output` can exceed 65,535 bytes → raw Dolt error
+- **Silent failure path**: Dolt error propagates out of `captureResult` → absorbed by `writeQueue.set(cwd, next.catch(() => {}))` → task permanently stuck in `in_progress`, EM never notified, output lost
+- **Fix A**: Before text-append branch, do `bd show` to get current notes length; compute `remaining = NOTES_CEILING - currentNotesLength`; use file-offload path if `output.length > remaining`
+- **Fix B**: In `_runAndClose`, wrap `captureResult` enqueue with `.catch(err => notifyEM(...))` so stuck tasks are visible
+- `NOTES_CEILING` constant not yet defined — needs adding alongside `TEXT_CAP`
 
 ## Integration Recommendations (From First Analysis)
 

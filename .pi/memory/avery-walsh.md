@@ -7,6 +7,7 @@
 
 ## Branch notes
 - `beads-integration`: active workstream branch; Integration A implemented; Integration B full design doc committed (`design-beads-integration-b.md`); Integrations C–D remain as earlier design docs in `.pi/docs/`
-- Last commit on branch: `9936c27` — fix(org-extension): preserve contextPct across memberState transitions via setMemberStatus helper
+- Last commit on branch: `93bedff` — feat(roster): onboard Blaine Mwangi; tidy org-extension display and closure scope
 - Team roster now includes: Finley Park (software-architect), onboarded 2026-05-01
 - Casey Kim removed from roster 2026-05-01; replaced by Remy Osei
+- Blaine Mwangi added to roster 2026-05-01 (typescript-engineer)

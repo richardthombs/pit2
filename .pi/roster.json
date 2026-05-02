@@ -43,22 +43,16 @@
       "hiredAt": "2026-04-30T04:38:53.887Z"
     },
     {
-      "id": "finley-park",
-      "name": "Finley Park",
-      "role": "software-architect",
-      "hiredAt": "2026-05-01T09:24:41.028Z"
-    },
-    {
       "id": "remy-osei",
       "name": "Remy Osei",
       "role": "typescript-engineer",
       "hiredAt": "2026-05-01T13:55:22.125Z"
     },
     {
-      "id": "blaine-mwangi",
-      "name": "Blaine Mwangi",
+      "id": "sage-okonkwo",
+      "name": "Sage Okonkwo",
       "role": "typescript-engineer",
-      "hiredAt": "2026-05-01T15:37:06.978Z"
+      "hiredAt": "2026-05-01T22:02:46.756Z"
     }
   ],
   "usedNames": [
@@ -77,6 +71,7 @@
     "Lennox Ibrahim",
     "Finley Park",
     "Remy Osei",
-    "Blaine Mwangi"
+    "Blaine Mwangi",
+    "Sage Okonkwo"
   ]
 }

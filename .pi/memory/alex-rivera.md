@@ -64,6 +64,37 @@ Installed at `/Users/richardthombs/.nvm/versions/node/v24.13.1/lib/node_modules/
 - **`bash` access gap**: `software-architect`, `technical-writer`, `prompt-engineer`, `documentation-steward` all lack `bash` in tools frontmatter. Must be added before broker can dispatch to these roles. Documented in §15 of design-beads-integration-b.md.
 - **Remaining open questions**: OQ-1 (failure count tracking in-memory vs beads) and OQ-2 (multi-cwd broker) — both low priority.
 
+## Broker-Only Dispatch — Stakeholder Decisions (2026-05-01)
+
+- **Spec**: `.pi/docs/spec-delegate-via-broker.md` — full implementation spec.
+- **Decision 1**: Broker delivers full result text to EM as follow-up after every successful task. New `deliverResult` callback added to `Broker.configure()`. Called inside `_enqueueWrite` after `captureResult()` — ensures beads committed before EM gets message.
+- **Decision 2**: `delegate` tool retired. All dispatch through beads + broker.
+- **Message format**: `**Task completed: [title]**\nBead \`[id]\` · Role: [role] · Member: [name]\n\n[full output]`
+- **New broker callbacks**: `deliverResult(taskId, taskTitle, role, memberName, output)`, `scheduleDoneReset(memberName)`, `accumulateMemberUsage(memberName, usage)` — all three added to `configure()` in same pass.
+- **`delegate` removal**: ~500 lines gone. Also removes `asyncMode`, `/async` command, `DelegateParams`, `AssigneeFields`, `deliverResult` function. `setMemberStatus`, `scheduleDoneReset`, `accumulateUsage` helpers are KEPT (wired to broker).
+- **Widget**: Remove `(async: on/off)` from EM header line.
+- **Chain pattern**: `bd_dep_add` replaces `delegate chain`. `{previous}` replaced by upstream context injection (2000-char cap) + EM reading follow-up and updating downstream bead design pre-dispatch. Timing window is tight — recommend pre-populating design field at planning time.
+- **ADR-008**: Proposed, documented in `spec-delegate-via-broker.md` §9. Supersedes ADR-007.
+- **Session startup pattern**: `bd_broker_start()` once at session start; leave running. All `bd_task_create` calls auto-dispatch.
+
+## Delegate + Broker Unification — Design Decision (2026-05-01) [SUPERSEDED by ADR-008]
+
+- **ADR-007 Proposed → SUPERSEDED by ADR-008**: Was "unify tracking, not dispatch." Superseded by stakeholder decision to retire delegate entirely.
+- **Chain mode**: stays inline, creates beads just-in-time (after `{previous}` substitution). Broker NOT involved. Each chain step = one bead. The structural chain relationship is not expressed as bead deps — that's the tradeoff vs declarative pipeline.
+- **Sync return**: preserved. Bead create/close is a wrapper around existing `runTask`; doesn't change delivery model.
+- **Active workstream**: `activeWorkstreamId: string | null` module var in `index.ts`. Set via new `bd_workstream_set_active` tool. Delegate beads attach to it if set, top-level if not. No auto-epic creation.
+- **Granularity**: `track: boolean` param on `DelegateParams` (default true). EM passes `false` for trivial/ephemeral queries.
+- **`bd_await` tool**: new escape hatch — polls bead until closed, returns close reason inline. For sync-over-broker semantics when needed.
+- **All bead ops in delegate are best-effort** (try/catch): bead write failure logs warning + proceeds with task execution.
+- **Key rejected alternative**: routing delegate through broker — breaks `{previous}` (upstream injection is lossy), adds async latency to sync mode, no benefit.
+
+- **§8.6 `description` vs `design`**: `description` = primary task brief field (EM specifies what the agent must do; agents self-serve via `bd show` reading `description` first). `design` = architectural rationale, optional. All spec/SYSTEM.md references to the default brief field should use `description`.
+
+## spec-delegate-via-broker.md Additions (2026-05-01)
+
+- **§2.6 Notes length safety**: `--append-notes` has no pre-flight length check; Dolt enforces 64KB silently via SQL error. `captureResult` must `bd show` to get `existingNotes`, check `existingNotes.length + newOutput.length > 50_000` (50KB safe threshold), and switch to `result_file` branch if exceeded. Check is required — omission causes silent data loss (throws through `_enqueueWrite`, EM never gets result).
+- **§8.5 Bead title convention**: titles must describe output, not activity. Pattern: `<Type>: <specific thing produced or concluded>`. This must be encoded in §8.2 "How to Work" SYSTEM.md guidance so EM applies it on every `bd_task_create`. Downstream agents use titles to filter relevant completed beads; vague titles force full fetches.
+
 ## Integration B — Result Capture and Propagation (§17, 2026-05-01)
 
 - **§17 appended** to `design-beads-integration-b.md`. Full design: capture heuristic, `captureResult()`, upstream findings injection, fan-in.

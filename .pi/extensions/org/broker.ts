@@ -344,7 +344,15 @@ export class Broker {
 			// ── 4. Capture result or requeue (serialised through write queue) ─────
 			if (result.exitCode === 0) {
 				this._enqueueWrite(cwd, () =>
-					this.captureResult(cwd, task.id, result.output, commitBefore),
+					this.captureResult(cwd, task.id, result.output, commitBefore).catch(
+						(err: any) => {
+							this.notifyEM(
+								`Broker: captureResult failed for task ${task.id} ("${task.title}") — ` +
+									`task is stuck in_progress and output may be lost. ` +
+									`Error: ${err?.message ?? err}`,
+							);
+						},
+					),
 				);
 			} else {
 				const reason = `exitCode ${result.exitCode}: ${(result.stderr || result.output).slice(0, 200)}`;
@@ -365,9 +373,16 @@ export class Broker {
 	 * Branches:
 	 * - File-change: a new git commit landed since commitBefore → record SHA in
 	 *   metadata.git_commit via `bd update --set-metadata`, then close.
-	 * - Text ≤40 KB: append full output to notes via `--append-notes`, then close.
-	 * - Text >40 KB: write to `.pi/task-results/<id>.md`, record path in
-	 *   metadata.result_file via `bd update --set-metadata`, then close.
+	 * - Text fits (≤40 KB AND fits in remaining notes capacity): append full output
+	 *   to notes via `--append-notes`, then close.
+	 * - Text too large (>40 KB OR would overflow the 50 KB notes threshold): write
+	 *   to `.pi/task-results/<id>.md`, record path in metadata.result_file via
+	 *   `bd update --set-metadata`, then close.
+	 *
+	 * Before appending, a `bd show` call fetches existing notes length to guard
+	 * against the retry-overflow scenario (first-run notes + second-run output
+	 * exceeding Dolt's 64 KB column ceiling). If `bd show` fails, file-offload
+	 * is forced as the safe fallback.
 	 *
 	 * Must be called inside the write queue (serialised).
 	 */
@@ -390,33 +405,50 @@ export class Broker {
 				`git_commit=${commitAfter}`,
 				"--json",
 			]);
-		} else if (output.length <= TEXT_CAP) {
-			// Text-output path (≤40 KB): append full output to notes, then close.
-			await this.runBd(cwd, [
-				"update",
-				taskId,
-				`--append-notes=${output}`,
-				"--json",
-			]);
 		} else {
-			// Large text-output path (>40 KB): offload to disk, record path in metadata.
-			const outPath = path.join(cwd, ".pi", "task-results", `${taskId}.md`);
-			await fs.mkdir(path.dirname(outPath), { recursive: true });
-			await fs.writeFile(outPath, output, "utf8");
-			await this.runBd(cwd, [
-				"update",
-				taskId,
-				"--append-notes",
-				`[Full output written to file — see metadata.result_file]`,
-				"--json",
-			]);
-			await this.runBd(cwd, [
-				"update",
-				taskId,
-				"--set-metadata",
-				`result_file=${outPath}`,
-				"--json",
-			]);
+			// Determine remaining notes capacity before deciding how to store output.
+			// Dolt's notes column has a ~64 KB ceiling; use 50 KB as a conservative
+			// threshold so accumulated notes from prior attempts are never overflowed.
+			let remaining = 0; // conservative default — forces file-offload if fetch fails
+			try {
+				const { stdout: showOut } = await this.runBd(cwd, ["show", taskId, "--json"]);
+				const currentTask = (JSON.parse(showOut) as any[])[0];
+				const currentNotesLength =
+					(currentTask?.notes as string | null | undefined)?.length ?? 0;
+				remaining = 50_000 - currentNotesLength;
+			} catch {
+				// bd show failed — assume no capacity remains; force file-offload below.
+			}
+
+			if (output.length <= TEXT_CAP && output.length <= remaining) {
+				// Text-output path: fits within both the 40 KB soft cap and remaining
+				// notes capacity — append directly.
+				await this.runBd(cwd, [
+					"update",
+					taskId,
+					`--append-notes=${output}`,
+					"--json",
+				]);
+			} else {
+				// File-offload path: output exceeds TEXT_CAP or would overflow existing notes.
+				const outPath = path.join(cwd, ".pi", "task-results", `${taskId}.md`);
+				await fs.mkdir(path.dirname(outPath), { recursive: true });
+				await fs.writeFile(outPath, output, "utf8");
+				await this.runBd(cwd, [
+					"update",
+					taskId,
+					"--append-notes",
+					`[Full output written to file — see metadata.result_file]`,
+					"--json",
+				]);
+				await this.runBd(cwd, [
+					"update",
+					taskId,
+					"--set-metadata",
+					`result_file=${outPath}`,
+					"--json",
+				]);
+			}
 		}
 
 		// Always close with a one-line human-readable summary.
