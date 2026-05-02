@@ -777,7 +777,17 @@ export default function (pi: ExtensionAPI) {
 		(cwd, ms, role) => resolveOrScale(cwd, ms, undefined, role),
 		runTaskWithStreaming,
 		memberState,
+		// notifyEM — operational messages (failures, warnings)
 		(msg) => pi.sendUserMessage(msg, { deliverAs: "followUp" }),
+		// deliverResult — completed task output
+		(taskId, taskTitle, role, memberName, output) => {
+			const header = `**Task completed: ${taskTitle}**\nBead \`${taskId}\` · Role: ${role} · Member: ${memberName}\n\n`;
+			pi.sendUserMessage(header + output, { deliverAs: "followUp" });
+		},
+		// scheduleDoneReset — resets member status to idle after 5 min
+		(memberName) => scheduleDoneReset(memberName),
+		// accumulateMemberUsage — accumulates token usage stats
+		(memberName, usage) => accumulateUsage(memberName, usage),
 	);
 
 	function accumulateUsage(memberName: string, delta: UsageStats): void {
@@ -1324,6 +1334,9 @@ export default function (pi: ExtensionAPI) {
 			epic_id: Type.Optional(Type.String({
 				description: "ID of the parent epic (from bd_workstream_start). Omit only if this is a standalone task with no workstream.",
 			})),
+			description: Type.Optional(Type.String({
+				description: "Full task specification — what the agent must do, file paths, constraints, acceptance criteria. This is the primary field the agent reads.",
+			})),
 			design: Type.Optional(Type.String({
 				description: "Rationale for this task — why it is needed, what decision it implements.",
 			})),
@@ -1339,6 +1352,7 @@ export default function (pi: ExtensionAPI) {
 			if (guard) return guard;
 
 			const args = ["create", params.title, "--type=task", "--json"];
+			if (params.description) args.push(`--description=${params.description}`);
 			if (params.epic_id) args.push(`--parent=${params.epic_id}`);
 			if (params.design)  args.push(`--design=${params.design}`);
 			if (params.role)    args.push(`--label=${params.role}`);

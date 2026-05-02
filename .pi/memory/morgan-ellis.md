@@ -49,6 +49,19 @@
 - Pre-existing (not fixed): `--append-notes=VALUE` (single arg) in text-fit path vs `--append-notes` + VALUE (two args) in file-offload path — format inconsistency
 - Pre-existing (not fixed): two sequential `bd update` calls in file-offload path not atomic; partial failure leaves notes/metadata inconsistent
 
+### Broker Callback Wiring — broker-only dispatch change (reviewed)
+- `Broker.configure()` now has 8 params: original 5 + `deliverResult(taskId, taskTitle, role, memberName, output)`, `scheduleDoneReset(memberName)`, `accumulateMemberUsage(memberName, usage)`
+- `deliverResult` format: `` **Task completed: ${taskTitle}**\nBead `${taskId}` · Role: ${role} · Member: ${memberName}\n\n${output} ``
+- Old module-level `deliverResult(memberName, roleName, content)` still present in index.ts — used by `delegate` async paths; different message format. Divergence is intentional until delegate is removed.
+- `RunTaskFn` in broker.ts is 4-arg only — no signal/onProgress; broker-dispatched tasks cannot be cancelled via abort signal (pre-existing limitation)
+- `SYSTEM.md` EM identity is `.pi/SYSTEM.md` (not `.pi/agents/SYSTEM.md`)
+
+### BLOCKING gap identified in broker-only dispatch review
+- SYSTEM.md now tells EM to populate `description` as the primary task brief ("Always populate this when creating a task"), but `bd_task_create` has NO `description` parameter — only title, epic_id, design, role
+- `_runAndClose` brief template mentions "title, design, acceptance criteria" but NOT description
+- Agents fetching task via `bd show` will find `description` empty/absent if EM follows SYSTEM.md guidance
+- Fix needed: add `description` param to `bd_task_create` mapping to `--description=VALUE` in bd CLI
+
 ### Context Usage Polling
 - `runTaskWithStreaming` captures `contextPct` post-task via `entry.client.getSessionStats()`
 - Reaper `setInterval` (60s) also polls all `liveMembers` — fix landed as uncommitted working-tree change: removed `status !== "working"` filter, added `?? { status: "idle" }` fallback

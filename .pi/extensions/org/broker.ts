@@ -37,10 +37,20 @@ interface TeamMember {
 	hiredAt: string;
 }
 
+interface UsageStats {
+	input: number;
+	output: number;
+	cacheRead: number;
+	cacheWrite: number;
+	cost: number;
+	contextTokens: number;
+}
+
 interface RunResult {
 	exitCode: number;
 	output: string;
 	stderr: string;
+	usage?: UsageStats;
 }
 
 type MemberStatus = "idle" | "working" | "done" | "error";
@@ -153,6 +163,9 @@ export class Broker {
 	private runTask!: RunTaskFn;
 	private memberState!: Map<string, MemberState>;
 	private notifyEM!: (msg: string) => void;
+	private deliverResult!: (taskId: string, taskTitle: string, role: string, memberName: string, output: string) => void;
+	private scheduleDoneReset!: (memberName: string) => void;
+	private accumulateMemberUsage!: (memberName: string, usage: UsageStats) => void;
 
 	constructor() {}
 
@@ -166,12 +179,18 @@ export class Broker {
 		runTask: RunTaskFn,
 		memberState: Map<string, MemberState>,
 		notifyEM: (msg: string) => void,
+		deliverResult: (taskId: string, taskTitle: string, role: string, memberName: string, output: string) => void,
+		scheduleDoneReset: (memberName: string) => void,
+		accumulateMemberUsage: (memberName: string, usage: UsageStats) => void,
 	): void {
 		this.runBd = runBd;
 		this.resolveOrScale = resolveOrScale;
 		this.runTask = runTask;
 		this.memberState = memberState;
 		this.notifyEM = notifyEM;
+		this.deliverResult = deliverResult;
+		this.scheduleDoneReset = scheduleDoneReset;
+		this.accumulateMemberUsage = accumulateMemberUsage;
 	}
 
 	/**
@@ -325,8 +344,9 @@ export class Broker {
 			const beadsDir = path.join(cwd, ".beads");
 			let brief = [
 				`Your task is described in bead ${task.id}.`,
-				`Retrieve the full details (title, design, acceptance criteria) with:`,
+				`Retrieve the full details (title, description, design, acceptance criteria) with:`,
 				`  BEADS_DIR=${beadsDir} bd show ${task.id} --json`,
+				`The description field contains the full task specification.`,
 				`Then ${verb} as specified.`,
 			].join("\n");
 			if (upstreamContext) brief += `\n\n${upstreamContext}`;
@@ -341,19 +361,28 @@ export class Broker {
 				task: task.title,
 			});
 
-			// ── 4. Capture result or requeue (serialised through write queue) ─────
+			// ── 4. Capture result + deliver to EM, or requeue (serialised through write queue) ─────
 			if (result.exitCode === 0) {
-				this._enqueueWrite(cwd, () =>
-					this.captureResult(cwd, task.id, result.output, commitBefore).catch(
-						(err: any) => {
-							this.notifyEM(
-								`Broker: captureResult failed for task ${task.id} ("${task.title}") — ` +
-									`task is stuck in_progress and output may be lost. ` +
-									`Error: ${err?.message ?? err}`,
-							);
-						},
-					),
-				);
+				this._enqueueWrite(cwd, async () => {
+					try {
+						await this.captureResult(cwd, task.id, result.output, commitBefore);
+					} catch (err: any) {
+						this.notifyEM(
+							`Broker: captureResult failed for task ${task.id} ("${task.title}") — ` +
+								`task is stuck in_progress and output may be lost. ` +
+								`Error: ${err?.message ?? err}`,
+						);
+						return;
+					}
+					// Decision 1: deliver full output to EM after beads record is committed.
+					this.deliverResult(task.id, task.title, role, r.member.name, result.output);
+					// Reset member status to idle after 5 minutes
+					this.scheduleDoneReset(r.member.name);
+					// Accumulate usage stats
+					if (result.usage) {
+						this.accumulateMemberUsage(r.member.name, result.usage);
+					}
+				});
 			} else {
 				const reason = `exitCode ${result.exitCode}: ${(result.stderr || result.output).slice(0, 200)}`;
 				this._enqueueWrite(cwd, () => this._requeueTask(cwd, task.id, reason));
