@@ -551,11 +551,12 @@ async function runTask(
 async function runBd(
 	cwd: string,
 	args: string[],
+	extraEnv: Record<string, string> = {},
 ): Promise<{ stdout: string; stderr: string }> {
 	const beadsDir = path.join(cwd, ".beads");
 	return execFile("bd", args, {
 		cwd,
-		env: { ...process.env, BEADS_DIR: beadsDir },
+		env: { ...process.env, BEADS_DIR: beadsDir, ...extraEnv },
 		timeout: 15_000, // 15 s — bd commands are always fast; treat timeout as an error
 	});
 }

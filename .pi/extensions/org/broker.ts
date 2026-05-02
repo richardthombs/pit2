@@ -60,7 +60,7 @@ type ResolveResult =
 	| { member: TeamMember; config: AgentConfig; hired: boolean }
 	| { error: string };
 
-type RunBdFn = (cwd: string, args: string[]) => Promise<{ stdout: string; stderr: string }>;
+type RunBdFn = (cwd: string, args: string[], extraEnv?: Record<string, string>) => Promise<{ stdout: string; stderr: string }>;
 type ResolveOrScaleFn = (
 	cwd: string,
 	memberState: Map<string, MemberState>,
@@ -112,9 +112,6 @@ export class Broker {
 
 	/** Per-cwd promise chain — serialises all bd writes. */
 	writeQueue = new Map<string, Promise<void>>();
-
-	/** Task IDs currently claimed (in_progress or being dispatched). */
-	liveKeys = new Set<string>();
 
 	/** In-memory failure counter per task ID. Reset on broker restart. */
 	private failureCounts = new Map<string, number>();
@@ -286,13 +283,6 @@ export class Broker {
 			const role = task.labels?.[0];
 			if (!role) continue;
 
-			// Already claimed by a previous dispatch cycle (in_progress).
-			// Note: liveKeys.delete fires in _runAndClose's finally block, after
-			// _enqueueWrite(captureResult) is called — so captureResult is always
-			// ahead of any new dispatch cycle in the write queue. A task can only
-			// re-appear in bd ready after _requeueTask intentionally re-opens it.
-			if (this.liveKeys.has(task.id)) continue;
-
 			// Hard-stop after 3 failures to prevent infinite retry loops.
 			const failures = this.failureCounts.get(task.id) ?? 0;
 			if (failures >= 3) {
@@ -306,17 +296,9 @@ export class Broker {
 			const r = await this.resolveOrScale(cwd, this.memberState, role);
 			if ("error" in r) continue; // no available member; try next cycle
 
-			// Claim before dispatch so that subsequent cycles skip this task.
-			// Race-condition note: _dispatchCycle is serialised through writeQueue, so
-			// two cycles can never run concurrently. Within a single cycle the for-loop
-			// is sequential (each resolveOrScale + runBd is awaited before the next
-			// iteration). Therefore liveKeys.add always precedes the next cycle's
-			// liveKeys.has check; double-dispatch at the TypeScript level is not possible.
-			this.liveKeys.add(task.id);
 			try {
-				await this.runBd(cwd, ["update", task.id, "--claim", `--assignee=${r.member.name}`, "--json"]);
+				await this.runBd(cwd, ["update", task.id, "--claim", "--json"], { BEADS_ACTOR: r.member.name });
 			} catch (err: any) {
-				this.liveKeys.delete(task.id);
 				this.notifyEM(
 					`Broker: failed to claim task ${task.id} — ${err?.message ?? err}`,
 				);
@@ -453,7 +435,6 @@ export class Broker {
 			const reason = err?.message ?? String(err);
 			this._enqueueWrite(cwd, () => this._requeueTask(cwd, task.id, reason));
 		} finally {
-			this.liveKeys.delete(task.id);
 		}
 	}
 
@@ -490,14 +471,14 @@ export class Broker {
 			);
 		}
 
-		await this.runBd(cwd, ["update", taskId, `--append-notes=${output}`, "--json"]);
+		await this.runBd(cwd, ["update", taskId, `--append-notes=${output}`, "--json"], { BEADS_ACTOR: memberName });
 
 		const inputK  = ((usage?.input  ?? 0) / 1000).toFixed(1);
 		const outputK = ((usage?.output ?? 0) / 1000).toFixed(1);
 		const cost    = (usage?.cost    ?? 0).toFixed(3);
 		const reason  = `Completed by ${memberName} (${role}) — ${durationSecs}s · ↑${inputK}k ↓${outputK}k · $${cost}`;
 		// bd close is silently idempotent — re-closing an already-closed task exits 0.
-		await this.runBd(cwd, ["close", taskId, `--reason=${reason}`, "--json"]);
+		await this.runBd(cwd, ["close", taskId, `--reason=${reason}`, "--json"], { BEADS_ACTOR: memberName });
 	}
 
 	/**

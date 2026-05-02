@@ -1,4 +1,4 @@
-# Remy Osei — Memory
+# Sage Okonkwo — Memory
 
 ## Codebase
 
@@ -7,6 +7,12 @@
 - Agent role definitions: `.pi/agents/<role>.md` (frontmatter + body = system prompt)
 - Roster stored at `.pi/roster.json`
 - Role-scoped memory files: `.pi/memory/<role>.md` (shared across members of same role)
+
+## Broker / runBd
+
+- `runBd(cwd, args, extraEnv?)` in `index.ts` — optional third arg merges into the `env` object alongside `BEADS_DIR`
+- `RunBdFn` type in `broker.ts` mirrors this signature
+- Claim calls use `BEADS_ACTOR: member.name` env var (not `--assignee` flag) for audit attribution
 
 ## TypeScript/Compilation
 
