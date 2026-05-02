@@ -74,6 +74,12 @@
 - `contextPct`: `undefined` = not polled, `null` = model doesn't report, `number` = percentage
 - Widget renders `ctx:XX%` unconditionally when `contextPct` is a number (threshold removed in `66905af`)
 
+### Broker Fan-out/Fan-in — Observed Failure Mode
+- Agents whose task deliverable is short/creative but who also need to update memory can write their memory-update reasoning as the final message, displacing the actual deliverable
+- `captureResult` captures whatever the model's final message is — no content validation gate
+- Confirmed via pit2-qob: Alex Rivera (pit2-qob.1) and Remy Osei (pit2-qob.4) returned memory-update paragraphs instead of their ocean word
+- Mitigation idea: add a prompt guard in `_runAndClose` brief: "Your final message must contain only your deliverable output"
+
 ### Known Open Items (non-blocking)
 - `fmtTokens` imported in `index.ts` but never used — dead import, should be cleaned up
 - `MEMORY_DIR`, `VALID_MEMORY_SECTIONS`, `MAX_MEMORY_ITEMS_PER_SECTION`, `extractMemoryEntries()` remain as dead exports in `utils.ts` — harmless
