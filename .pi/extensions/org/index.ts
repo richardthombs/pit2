@@ -731,6 +731,8 @@ export default function (pi: ExtensionAPI) {
 		(memberName) => scheduleDoneReset(memberName),
 		// accumulateMemberUsage — accumulates token usage stats
 		(memberName, usage) => accumulateUsage(memberName, usage),
+		// getLiveClient — returns the live RpcClient for a member if available
+		(cwd, memberName) => liveMembers.get(liveMemberKey(cwd, memberName))?.client,
 	);
 
 	function accumulateUsage(memberName: string, delta: UsageStats): void {

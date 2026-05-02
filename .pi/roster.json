@@ -1,12 +1,6 @@
 {
   "members": [
     {
-      "id": "alex-rivera",
-      "name": "Alex Rivera",
-      "role": "software-architect",
-      "hiredAt": "2026-04-29T00:00:00Z"
-    },
-    {
       "id": "sam-chen",
       "name": "Sam Chen",
       "role": "pi-specialist",
@@ -53,6 +47,12 @@
       "name": "Sage Okonkwo",
       "role": "typescript-engineer",
       "hiredAt": "2026-05-01T22:02:46.756Z"
+    },
+    {
+      "id": "kendall-mbeki",
+      "name": "Kendall Mbeki",
+      "role": "software-architect",
+      "hiredAt": "2026-05-02T08:17:36.471Z"
     }
   ],
   "usedNames": [
@@ -72,6 +72,7 @@
     "Finley Park",
     "Remy Osei",
     "Blaine Mwangi",
-    "Sage Okonkwo"
+    "Sage Okonkwo",
+    "Kendall Mbeki"
   ]
 }

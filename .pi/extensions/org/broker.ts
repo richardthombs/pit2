@@ -16,6 +16,7 @@ import * as path from "node:path";
 import * as fs from "node:fs/promises";
 import { exec as execCb } from "node:child_process";
 import { promisify } from "node:util";
+import { RpcClient } from "@mariozechner/pi-coding-agent";
 
 const exec = promisify(execCb);
 
@@ -166,6 +167,7 @@ export class Broker {
 	private deliverResult!: (taskId: string, taskTitle: string, role: string, memberName: string, output: string) => void;
 	private scheduleDoneReset!: (memberName: string) => void;
 	private accumulateMemberUsage!: (memberName: string, usage: UsageStats) => void;
+	private getLiveClient!: (cwd: string, memberName: string) => RpcClient | undefined;
 
 	constructor() {}
 
@@ -182,6 +184,7 @@ export class Broker {
 		deliverResult: (taskId: string, taskTitle: string, role: string, memberName: string, output: string) => void,
 		scheduleDoneReset: (memberName: string) => void,
 		accumulateMemberUsage: (memberName: string, usage: UsageStats) => void,
+		getLiveClient: (cwd: string, memberName: string) => RpcClient | undefined,
 	): void {
 		this.runBd = runBd;
 		this.resolveOrScale = resolveOrScale;
@@ -191,6 +194,7 @@ export class Broker {
 		this.deliverResult = deliverResult;
 		this.scheduleDoneReset = scheduleDoneReset;
 		this.accumulateMemberUsage = accumulateMemberUsage;
+		this.getLiveClient = getLiveClient;
 	}
 
 	/**
@@ -354,6 +358,24 @@ export class Broker {
 			// ── 2. Snapshot git HEAD, run task ────────────────────────────────────
 			const commitBefore = await getHeadCommit(cwd);
 			const result = await this.runTask(r.config, r.member.name, brief, cwd);
+
+			// ── 2b. Memory update phase ────────────────────────────────────────
+			// Capture the task output now; the memory phase must not affect what we deliver.
+			if (result.exitCode === 0) {
+				const liveClient = this.getLiveClient(cwd, r.member.name);
+				if (liveClient) {
+					try {
+						await liveClient.prompt(
+							"Memory update phase: review your memory file and update it if anything from the task you just completed is worth recording. Do not include any other commentary.",
+						);
+						await liveClient.waitForIdle(30_000);
+					} catch (err: any) {
+						this.notifyEM(
+							`Broker: memory update phase failed for ${r.member.name} after task ${task.id} ("${task.title}") — ${err?.message ?? err}`,
+						);
+					}
+				}
+			}
 
 			// ── 3. Update member state ────────────────────────────────────────────
 			this.memberState.set(r.member.name, {
