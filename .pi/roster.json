@@ -49,58 +49,10 @@
       "hiredAt": "2026-05-02T09:11:18.909Z"
     },
     {
-      "id": "blake-obrien",
-      "name": "Blake O'Brien",
-      "role": "qa-engineer",
-      "hiredAt": "2026-05-02T09:12:29.239Z"
-    },
-    {
-      "id": "jesse-andersen",
-      "name": "Jesse Andersen",
-      "role": "typescript-engineer",
-      "hiredAt": "2026-05-02T12:06:46.535Z"
-    },
-    {
-      "id": "hayden-yamamoto",
-      "name": "Hayden Yamamoto",
-      "role": "software-architect",
-      "hiredAt": "2026-05-02T13:25:55.966Z"
-    },
-    {
-      "id": "darcy-oduya",
-      "name": "Darcy Oduya",
-      "role": "technical-writer",
-      "hiredAt": "2026-05-02T13:51:10.794Z"
-    },
-    {
       "id": "tatum-larsson",
       "name": "Tatum Larsson",
       "role": "technical-writer",
       "hiredAt": "2026-05-02T13:51:11.288Z"
-    },
-    {
-      "id": "drew-nakamura",
-      "name": "Drew Nakamura",
-      "role": "technical-writer",
-      "hiredAt": "2026-05-02T13:51:12.109Z"
-    },
-    {
-      "id": "rowan-fernandez",
-      "name": "Rowan Fernandez",
-      "role": "technical-writer",
-      "hiredAt": "2026-05-02T13:51:12.587Z"
-    },
-    {
-      "id": "scout-petrov",
-      "name": "Scout Petrov",
-      "role": "qa-engineer",
-      "hiredAt": "2026-05-02T14:59:14.020Z"
-    },
-    {
-      "id": "vale-hassan",
-      "name": "Vale Hassan",
-      "role": "typescript-engineer",
-      "hiredAt": "2026-05-02T18:43:51.907Z"
     }
   ],
   "usedNames": [

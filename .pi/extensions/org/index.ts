@@ -1568,38 +1568,6 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.registerTool({
-		name: "bd_dep_add",
-		label: "Dep Add",
-		description:
-			"Record that one task blocks another (i.e. blocked_id cannot start until blocker_id is done). Use this to add dependencies between already-created tasks. For fan-in creation, prefer bd_task_create with the blocked_by parameter instead.",
-		promptSnippet: "Add a blocks dependency between tasks",
-		parameters: Type.Object({
-			blocker_id: Type.String({
-				description: "ID of the task that must complete first.",
-			}),
-			blocked_id: Type.String({
-				description: "ID of the task that cannot start until blocker_id is done.",
-			}),
-			type: Type.Optional(Type.Union([Type.Literal('blocks'), Type.Literal('parent-child')], { description: 'Dependency type — blocks (default) or parent-child' })),
-		}),
-		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-			const guard = beadsGuard(ctx.cwd);
-			if (guard) return guard;
-
-			try {
-				// Argument order: bd dep add <blocked> <blocker> — first arg is the dependent task
-				await runBd(ctx.cwd, ["dep", "add", params.blocked_id, params.blocker_id, `--type=${params.type ?? 'blocks'}`]);
-				return {
-					content: [{ type: "text", text: `Dependency added: ${params.blocker_id} blocks ${params.blocked_id}` }],
-					details: { blocker: params.blocker_id, blocked: params.blocked_id },
-				};
-			} catch (err: any) {
-				throw new Error(`bd_dep_add failed: ${err?.stderr ?? err?.message ?? err}`);
-			}
-		},
-	});
-
-	pi.registerTool({
 		name: "bd_list",
 		label: "List",
 		description:
