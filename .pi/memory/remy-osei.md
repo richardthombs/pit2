@@ -5,50 +5,30 @@
 ### Branch context
 - Active branch is `beads-integration`. Main development of the org extension happens here.
 
-### org extension (`/Users/richardthombs/dev/pit2/.pi/extensions/org/index.ts`)
-- As of 2026-05-01 on `beads-integration`, the file already contains all four context-window-usage changes:
-  - `contextPct?: number | null` on `MemberState`
-  - Post-task `getSessionStats()` call in `runTaskWithStreaming()`
-  - Async reaper that polls `getSessionStats()` for working members
-  - `XX%` display in `buildWidgetLines()` (shown for any non-null number — threshold removed 2026-05-01; `ctx:` label prefix removed 2026-05-01)
-- The file is ~1978 lines; the 50 KB read limit cuts off around line 1404.
+### Key files
+- **org extension:** `/Users/richardthombs/dev/pit2/.pi/extensions/org/index.ts` (~1978 lines; 50 KB read limit cuts off around line 1404 — use offset to read the rest)
+- **broker:** `/Users/richardthombs/dev/pit2/.pi/extensions/org/broker.ts`
+- **utils:** `/Users/richardthombs/dev/pit2/.pi/extensions/org/utils.ts`
+- **Tests:** only `tests/extensions/org/utils.test.ts` — no tests for broker or index
 
-### `setMemberStatus` helper (added 2026-05-01)
-- Inserted right after `memberMemoryPath` (~line 194)
-- Was accidentally omitted in the previous task (the batch that added it was rolled back; subsequent batches only fixed call sites)
+### org extension structure
+- `MemberState` holds per-member runtime state including `contextPct?: number | null` (null = model doesn't report usage; undefined = not yet polled)
+- `broker.configure()` is called inside the `export default function(pi)` body in `index.ts` — it injects closure-scoped deps (runBd, resolveOrScale, runTaskWithStreaming, memberState, notifyEM, deliverResult, scheduleDoneReset, newSession, getLiveClient)
+- `broker.start(cwd)` is called in the `session_start` handler (inside `export default`) immediately after `ensureBeadsInit()`; `start()` is idempotent — early-returns if already active
 
-### Auto-start broker on session_start (added 2026-05-02)
-- `broker.start(ctx.cwd)` called in `session_start` handler immediately after `ensureBeadsInit()` (~line 937)
-- `broker.start()` is now idempotent: early-returns if `this.active` is already true (guard at top of method)
-- `SYSTEM.md` updated in both "How to Work" and "Required actions" sections — `bd_broker_start` no longer a required manual step; tool still available for explicit restarts
-- The `bd_broker_start` tool itself also calls `broker.start()`; the idempotent guard makes that a no-op if already running
-
-### `newSession()` before each task dispatch (added 2026-05-02)
-- `_runAndClose()` calls `liveClient.newSession()` after building the brief, before `runTask()`
-- `liveClient` is hoisted before the newSession() call and reused in the memory-update phase (step 2b) — single `getLiveClient()` lookup for both
-- Wrapped in try/catch — failure logs via `notifyEM` but never blocks dispatch
-- `liveKeys` race was investigated: write-queue serialisation + sequential for-loop already prevents double-dispatch; no structural change needed (comment added at guard site documenting the reasoning)
-
-### Two-phase execution (added 2026-05-02)
-- `broker.ts` `_runAndClose()` now runs a memory update phase after a successful task:
-  - Calls `this.getLiveClient(cwd, memberName)?.prompt(...)` + `waitForIdle(30_000)` before updating member state
-  - Wrapped in try/catch; failures log via `notifyEM` but don't affect result delivery
-  - `getLiveClient` is injected via `configure()` as the last parameter (9th parameter)
-- `memory.md` (`/Users/richardthombs/dev/pit2/.pi/prompts/memory.md`) updated: agents told to wait for a follow-up prompt for memory; no commentary in main response
-- The edit tool can't match box-drawing `─` (U+2500) chars reliably — use Python script for those edits
-
-### Edit tool atomicity
-- When one edit in a batch fails, the ENTIRE batch is rolled back — no partial applies
-- Always verify the patterns match before mixing many independent edits in one call
-
-### `bd_task_create` tool — `blocked_by` parameter (added 2026-05-02)
-- `blocked_by: Type.Optional(Type.Array(Type.String(), ...))` added to schema
-- Maps to `--deps=<comma-separated IDs>` on `bd create` — bare IDs mean "new task is blocked by these"
-- `bd_dep_add` description updated: now clarifies it's for already-created tasks; `blocked_by` is preferred for fan-in creation
+### broker.ts structure
+- `configure()` injects dependencies rather than the constructor (module-level singleton pattern)
+- `getLiveClient` is the 9th parameter to `configure()`, injected so broker can call `newSession()` and `prompt()` on members
+- `_runAndClose()` is the private method that drives the full task lifecycle: newSession → runTask → memory-update phase → state update
+- Two-phase execution: after a successful task, `_runAndClose` prompts the member's live client with a memory-update message and calls `waitForIdle(30_000)` before marking the member idle
 
 ### Key API facts
 - `RpcClient` is imported from `@mariozechner/pi-coding-agent`
 - `client.getSessionStats()` returns an object with `contextUsage?.percent` (number | undefined)
 - `client.prompt(msg)` sends a message; `client.waitForIdle(timeoutMs)` waits for completion
 - `client.newSession()` clears the conversation window while keeping the RpcClient process alive
-- `null` is used in `memberState.contextPct` to mean "model doesn't report context usage"; `undefined` means "not yet polled"
+- `bd_task_create` tool accepts `blocked_by: string[]` — maps to `--deps=<comma-separated IDs>`; prefer this over `bd_dep_add` when creating tasks that are immediately blocked
+
+### Tooling gotchas
+- **Edit tool atomicity:** when one edit in a batch fails, the entire batch is rolled back — no partial applies. Verify patterns before mixing many independent edits in one call.
+- **Box-drawing characters:** the edit tool can't reliably match `─` (U+2500) and similar box-drawing chars — use a Python script for those edits instead.

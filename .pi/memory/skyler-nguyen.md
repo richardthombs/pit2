@@ -4,46 +4,46 @@
 
 - `AGENTS.md` — User guide for the EM; I own this file (loaded into every LLM context — keep concise)
 - `docs/features.md` — Formal feature specifications for all user-visible features
-- `.pi/extensions/org/index.ts` — Core org extension (all logic: delegate, hire/fire, widget, memory, broker tools)
-- `.pi/extensions/org/broker.ts` — Broker class (Integration B); singleton exported as `broker`
+- `.pi/extensions/org/index.ts` — Core org extension
 - `.pi/prompts/memory.md` — Memory injection template (uses [name] and [path] substitutions)
 - `.pi/memory/<member-id>.md` — Per-member memory files (member ID = name lowercased, spaces → hyphens)
+- `.beads/` — Workstream state directory at project root (runtime artifact, not in source)
 
-## Beads Integration (workstream persistence)
+## Documentation Corpus State
 
-- Seven `bd_*` tools registered in `index.ts` around line 1122; `bd_broker_start`/`bd_broker_stop` at ~1555
-- Auto-init via `bd init --stealth` at session start; `beadsReady` map tracks readiness per cwd
-- `.beads/` directory lives at project root (runtime artifact, not source)
-- Documented in: `docs/features.md` (full specs for both Beads and Broker), `AGENTS.md` (concise tables), `README.md` (key files + architecture)
-- Guidance to EM on when/how to use lives in `.pi/SYSTEM.md` "Workstream State (Beads)" section
+### Known accurate
+- Beads workstream feature: fully documented in `docs/features.md` and `AGENTS.md`
+- Broker (Integration B): fully documented in `docs/features.md` and `AGENTS.md`
+- Team roster and role descriptions: `AGENTS.md`
+- Memory system: documented in `docs/features.md`
 
-## Broker (Integration B)
+### Where things are documented
+- Full feature specs (beads, broker, memory, delegation): `docs/features.md`
+- Concise tables for EM daily use: `AGENTS.md`
+- Architecture overview and key files: `README.md`
+- EM guidance on when/how to use beads: `.pi/SYSTEM.md` "Workstream State (Beads)" section
 
-- Class defined in `broker.ts`; module-level singleton `broker` imported into `index.ts`
-- Dispatches labelled (`role`) beads tasks to available team members autonomously
-- Uses `resolveOrScale` (same as delegate) to find/hire members; serialises bd writes via per-cwd `writeQueue`
-- Result capture: git commit SHA / notes ≤40 KB / `.pi/task-results/<id>.md` for larger outputs
-- 3-failure defer: task set to `deferred`, EM notified; failure counts reset on `broker.start()`
-- Unlabelled tasks = EM-owned; broker never touches them
+### Known gaps / deferred
+- None currently identified
 
-## Memory is per-MEMBER, not per-role
+## Terminology
 
-- Injected unconditionally for ALL members
-- Template from `.pi/prompts/memory.md`; content appended to system prompt after template block
+- **Members** (not "agents") — the AI team members managed by the EM
+- **Workstream** — a tracked unit of work in the beads system (not "task", which is overloaded)
+- **Broker** — the autonomous dispatcher (Integration B) that routes labelled workstreams to members
+- **Delegate** — the EM command to assign a task to a specific named member
+- **Roster** — the current active team (`.pi/roster.json`)
+
+## Broker Behaviour (user-visible)
+
+- Dispatches workstreams labelled with a `role` to available team members autonomously
+- Unlabelled workstreams are EM-owned; broker never touches them
+- 3 consecutive failures → workstream set to `deferred`, EM notified
+- Large task results (>40 KB) stored in `.pi/task-results/<id>.md`; smaller results in beads notes
+
+## Memory System
+
+- Memory is per-member, not per-role; injected into every member's system prompt unconditionally
+- Template: `.pi/prompts/memory.md`; content from `.pi/memory/<member-id>.md` appended after template block
+- `memory: true` frontmatter flag in role definitions is vestigial — memory is injected regardless of it
 - Firing a member deletes their memory file
-- `memory: true` frontmatter flag is vestigial — loaded into AgentConfig but NOT checked in runTask
-
-## Async Mode
-
-- Default is ON (`let asyncMode = true` in index.ts)
-
-## Subagent Spawning (Context Isolation)
-
-- Args include `--system-prompt ""` and `--no-context-files`
-- Prevents subagents from receiving `.pi/SYSTEM.md` and `AGENTS.md`
-
-## Widget Streaming
-
-- While `status === "working"` and `state.streaming` is set: shows live snippets
-- Tools shown as `⚙ <tool-name>`; text shows last meaningful line (up to 80 chars)
-- Refresh interval: 150ms; done/error states show task description instead

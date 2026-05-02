@@ -7,6 +7,7 @@
 - Most important resource files: SKILL.md, DEPENDENCIES.md, WORKFLOWS.md, MOLECULES.md, AGENTS.md, ASYNC_GATES.md, BOUNDARIES.md, RESUMABILITY.md, INTEGRATION_PATTERNS.md
 - `bd prime` auto-generates a live context summary; canonical source of truth per ADR-0001
 - Version as of last research: 0.60.0
+- **Research workflow**: for beads capability questions, fetch SKILL.md first; it cross-links to the relevant sub-doc (ASYNC_GATES.md, AGENTS.md, etc.) — start there, not with a raw web search
 
 ## Label System (Verified Against Source)
 
@@ -77,13 +78,6 @@
 - **Atomicity in server mode**: `CreateIssue` commits internally first, then deps added — race window EXISTS (not relevant for pit2 today)
 - `--graph <file.json>`: batch-creates a whole issue graph atomically from JSON — alternative for multi-issue fanout materialisation
 
-### Bugs Found in spec-beads-integration-a.md §3.6 (Alex Rivera)
-- Tool 4 `bd_dep_add`: blocker/blocked IDs in wrong order in the `runBd` call
-- Tool 3 `bd_task_update`: uses `"done"` status (invalid) and parses `bd update` as single object
-- Tool 6 `bd_show`: parses `bd show` as single object (should be `[0]`)
-- All documented in `/Users/richardthombs/dev/pit2/.pi/docs/beads-em-reference.md`
-
-
 
 - **Embedded mode is single-writer** (file-locked). Multi-agent concurrent writes require Server mode (`bd init --server` → external `dolt sql-server`).
 - **Atomic claim**: `bd update <id> --claim` atomically sets assignee + in_progress in one command; prevents double-assignment in multi-agent scenarios.
@@ -111,46 +105,13 @@
 
 ## Storage Capabilities (Verified Against Schema + Source)
 
-### Storage schema — confirmed against source (migration path: `internal/storage/schema/migrations/`)
+- All TEXT fields (`description`, `design`, `acceptance_criteria`, `notes`, `close_reason`, etc.) are **64KB Dolt-enforced**; only `title` has an app-level max (500 chars)
+- **`--append-notes` has no pre-write length check** — pure string concat; silently fails at 64KB
+- **`metadata JSON`** is practically unlimited (~1GB LONGBLOB); must be valid JSON — use it for artifact refs, not notes
 
-**`issues` table TEXT fields (all 64KB Dolt-enforced, zero app-level length check except title):**
-- `title VARCHAR(500) NOT NULL` → app-enforced: required + max 500 chars in `Validate()`
-- `description TEXT NOT NULL` → 64KB, no app check
-- `design TEXT NOT NULL` → 64KB, no app check
-- `acceptance_criteria TEXT NOT NULL` → 64KB, no app check
-- `notes TEXT NOT NULL` → 64KB, no app check; `--append-notes` does NOT pre-check length before DB write
-- `close_reason TEXT DEFAULT ''` → 64KB, no max app check; `validation.on-close` only warns on short reasons
-- `payload TEXT DEFAULT ''` → 64KB; for `type=event` audit beads
-- `waiters TEXT DEFAULT ''` → 64KB; comma-separated mail addresses for gate notifications
-- `external_ref VARCHAR(255)` → 255 chars; indexed; no app check
-- `spec_id VARCHAR(1024)` → 1KB; indexed; no app check
-- `metadata JSON` → ~1GB (LONGBLOB in Dolt); **must be valid JSON** (json.Valid check in Validate())
-- `source_repo VARCHAR(512)` → 512 chars; internal routing, not synced
+## broker.ts — Notes Ceiling Bug
 
-**`comments` table:**
-- `text TEXT NOT NULL` → 64KB; required (NOT NULL); no app length check
-- `author VARCHAR(255) NOT NULL` → 255 chars; required
-
-**`dependencies` table:**
-- `metadata JSON` → ~1GB; no app validation
-- `thread_id VARCHAR(255)` → 255 chars; groups replies-to edges
-
-**Critical gotchas:**
-- `--append-notes` is pure string concat; no pre-write length check; hits 64KB silently
-- `title` is the ONLY field with bilateral app enforcement (required + max 500)
-- `metadata` is the only practically unlimited field → use it for artifact refs, not notes
-- `source_formula` and `source_location` are in types.go but NOT in 0001 migration — added by later ALTER TABLE; short internal strings
-- Migrations live at `internal/storage/schema/migrations/` (NOT `cmd/bd/store/migrations/`)
-
-## broker.ts — Notes Ceiling Bug (Verified Against Source)
-
-- File: `/Users/richardthombs/dev/pit2/.pi/extensions/org/broker.ts`
-- `TEXT_CAP = 40 * 1024` (40 KB) — guards **output size only**; does NOT fetch existing `notes` length before `--append-notes`
-- **Risk**: on a successful retry, `existing_notes + new_output` can exceed 65,535 bytes → raw Dolt error
-- **Silent failure path**: Dolt error propagates out of `captureResult` → absorbed by `writeQueue.set(cwd, next.catch(() => {}))` → task permanently stuck in `in_progress`, EM never notified, output lost
-- **Fix A**: Before text-append branch, do `bd show` to get current notes length; compute `remaining = NOTES_CEILING - currentNotesLength`; use file-offload path if `output.length > remaining`
-- **Fix B**: In `_runAndClose`, wrap `captureResult` enqueue with `.catch(err => notifyEM(...))` so stuck tasks are visible
-- `NOTES_CEILING` constant not yet defined — needs adding alongside `TEXT_CAP`
+- See `/Users/richardthombs/dev/pit2/.pi/docs/beads-em-reference.md` for full analysis and fix options
 
 ## Integration Recommendations (From First Analysis)
 
