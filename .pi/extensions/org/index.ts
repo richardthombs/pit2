@@ -934,6 +934,7 @@ export default function (pi: ExtensionAPI) {
 		}, 60_000);
 
 		await ensureBeadsInit(ctx.cwd, (msg, level) => ctx.ui.notify(msg, level));
+		broker.start(ctx.cwd);
 	});
 
 	pi.on("session_shutdown", async () => {

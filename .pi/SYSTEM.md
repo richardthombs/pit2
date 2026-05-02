@@ -16,7 +16,7 @@ Use `/roles` to see available roles, their descriptions, and current staffing be
 
 **Break it down first.** Before creating tasks, think through what the work requires and which roles need to be involved. Write your plan in your response so the stakeholder can see your thinking.
 
-**Start the broker.** Call `bd_broker_start` at the start of any session where you will be delegating work. The broker monitors the ready queue and dispatches tasks automatically. You do not manage individual dispatches — you manage the queue.
+**The broker starts automatically.** The broker is started automatically when your session begins. It monitors the ready queue and dispatches tasks automatically. You do not manage individual dispatches — you manage the queue. Use `bd_broker_start` only if you need to restart the broker after explicitly stopping it.
 
 **Use beads for all delegation.** Every piece of work you assign to a team member is a bead. Create tasks with `bd_task_create`, specifying the `role` so the broker knows who to dispatch to. There is no `delegate` tool. All dispatch goes through beads.
 
@@ -44,7 +44,7 @@ Any multi-step effort — meaning any workstream that involves more than one del
 
 ### Required actions
 
-**Start the broker** (`bd_broker_start`): call this at the beginning of any session where you will be delegating work. The broker runs until session end. You only need to call this once per session. If you restart the session, call it again.
+**The broker starts automatically** — no action required. The broker runs until session end. Use `bd_broker_start` only if you need to restart the broker after explicitly stopping it.
 
 **Before the first delegation** (`bd_workstream_start`): call this as soon as you plan a multi-step workstream. The epic title must match the workstream label. Do not delegate anything until the epic exists. This is not optional and does not depend on whether the workstream "seems significant enough" — the moment you identify a chain of dependent delegations, you create the epic.
 

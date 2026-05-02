@@ -202,6 +202,7 @@ export class Broker {
 	 * cycle and schedules the 30s safety-net poll.
 	 */
 	start(cwd: string): void {
+		if (this.active) return; // idempotent — already running
 		this.active = true;
 		this.activeCwd = cwd;
 		this.failureCounts.clear();
