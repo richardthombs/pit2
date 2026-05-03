@@ -15,6 +15,31 @@
 import * as path from "node:path";
 import { RpcClient } from "@mariozechner/pi-coding-agent";
 
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+/**
+ * Races `client.waitForIdle(timeoutMs)` against a 500 ms polling loop that
+ * detects unexpected child-process exit. Throws early if the process exits
+ * before the idle signal arrives, preventing indefinite hangs.
+ */
+async function waitForIdleOrExit(client: RpcClient, timeoutMs: number): Promise<void> {
+	let rejectFn!: (err: Error) => void;
+	const exitPromise = new Promise<never>((_, reject) => { rejectFn = reject; });
+
+	const poll = setInterval(() => {
+		const proc = (client as any).process as import("node:child_process").ChildProcess | null;
+		if (!proc || proc.exitCode !== null || proc.killed) {
+			rejectFn(new Error("RPC client process exited unexpectedly"));
+		}
+	}, 500);
+
+	try {
+		await Promise.race([client.waitForIdle(timeoutMs), exitPromise]);
+	} finally {
+		clearInterval(poll);
+	}
+}
+
 // ─── Local types (mirrored from index.ts to avoid circular imports) ──────────
 
 interface AgentConfig {
@@ -183,7 +208,6 @@ export class Broker {
 		if (this.active) return; // idempotent — already running
 		this.active = true;
 		this.activeCwd = cwd;
-		this.failureCounts.clear();
 		this.memoryPhaseQueue.clear();
 		this._schedulePoll();
 		this.onTaskCreated(cwd); // immediate cycle on start
@@ -337,7 +361,12 @@ export class Broker {
 				// "already claimed" means a previous broker session dispatched this task;
 				// update memberState so we don't keep retrying, then skip.
 				if (detail.toLowerCase().includes("already claimed")) {
-					this.memberState.set(r.member.name, { status: "working", task: task.id });
+					try {
+						await this.notifyEM(
+							`Broker: task ${task.id} ("${task.title}") was already claimed — skipping. ` +
+							`If it is abandoned, close it manually with: BEADS_DIR=${process.env.BEADS_DIR ?? '<BEADS_DIR>'} bd close ${task.id}`,
+						);
+					} catch { /* session stale — silently drop */ }
 					continue;
 				}
 				try {
@@ -394,24 +423,17 @@ export class Broker {
 			].join("\n");
 			if (upstreamContext) brief += `\n\n${upstreamContext}`;
 
-			// ── 2. Clear prior context; run task ─────────────────────────────────────
-			// newSession() wipes the conversation window so the member sees only the
-			// new brief — not residue from their previous task. Memory-file continuity
-			// is handled by the system-prompt injection at session start, so clearing
-			// the context window is safe. If newSession() fails, the client is evicted
-			// so the next runTask call creates a fresh session (context bleed prevention).
+			// ── 2. Evict prior client; run task ──────────────────────────────────────
+			// Before each task the live client is stopped and evicted so the member
+			// sees only the new brief — not residue from their previous task.
+			// Memory-file continuity is handled by the system-prompt injection at
+			// session start, so a fresh process is safe. getOrCreateClient() (called
+			// inside runTask) always spawns with --no-session, guaranteeing no
+			// persistent .jsonl session files are written to the project CWD.
 			const liveClient = this.getLiveClient(cwd, r.member.name);
 			if (liveClient) {
-				try {
-					await liveClient.newSession();
-				} catch (err: any) {
-					await this.notifyEM(
-						`Broker: newSession() failed for ${r.member.name} — evicting client to prevent context bleed. Task ${task.id} will run in a fresh session. ${err?.message ?? err}`,
-					);
-					try { await liveClient.stop(); } catch { /* ignore stop errors */ }
-					this.evictLiveClient(cwd, r.member.name);
-					// liveClient is now gone; runTask will create a fresh one
-				}
+				try { await liveClient.stop(); } catch { /* ignore stop errors */ }
+				this.evictLiveClient(cwd, r.member.name);
 			}
 			const startedAt = Date.now();
 			const result = await this.runTask(r.config, r.member.name, brief, cwd);
@@ -420,8 +442,11 @@ export class Broker {
 			// ── 2b. Memory update phase ────────────────────────────────────────
 			// Enqueued per role so same-role members don't race on the shared role memory file.
 			// Runs independently of the write queue — captureResult and inbox write are handled separately.
-			if (result.exitCode === 0 && liveClient) {
-				const capturedClient = liveClient;
+			// Use getLiveClient() here (not the pre-eviction reference) — runTask() →
+			// getOrCreateClient() registered a fresh client; the old liveClient is stopped.
+			const freshClient = this.getLiveClient(cwd, r.member.name);
+			if (result.exitCode === 0 && freshClient) {
+				const capturedClient = freshClient;
 				const capturedMemberName = r.member.name;
 				const capturedTaskId = task.id;
 				const capturedTaskTitle = task.title;
@@ -430,7 +455,7 @@ export class Broker {
 						await capturedClient.prompt(
 							"Memory update phase: review your memory file and update it if anything from the task you just completed is worth recording. Do not include any other commentary.",
 						);
-						await capturedClient.waitForIdle(30_000);
+						await waitForIdleOrExit(capturedClient, 30_000);
 					} catch (err: any) {
 						await this.notifyEM(
 							`Broker: memory update phase failed for ${capturedMemberName} after task ${capturedTaskId} ("${capturedTaskTitle}") — ${err?.message ?? err}`,
@@ -511,7 +536,7 @@ export class Broker {
 		const title = `Task completed: ${taskTitle}`;
 		const fromSlug = memberName.toLowerCase().replace(/\s+/g, "-");
 		const metadata = JSON.stringify({ task_id: taskId, role, member_name: memberName });
-		await this.runBd(cwd, [
+		await this._runBdRetry(cwd, [
 			"create", title,
 			"--type=task",
 			"--assignee=em/",
@@ -557,14 +582,26 @@ export class Broker {
 			);
 		}
 
-		await this.runBd(cwd, ["update", taskId, `--append-notes=${output}`, "--json"], { BEADS_ACTOR: memberName });
+		await this._runBdRetry(cwd, ["update", taskId, `--append-notes=${output}`, "--json"], { BEADS_ACTOR: memberName });
 
 		const inputK  = ((usage?.input  ?? 0) / 1000).toFixed(1);
 		const outputK = ((usage?.output ?? 0) / 1000).toFixed(1);
 		const cost    = (usage?.cost    ?? 0).toFixed(3);
 		const reason  = `Completed by ${memberName} (${role}) — ${durationSecs}s · ↑${inputK}k ↓${outputK}k · $${cost}`;
 		// bd close is silently idempotent — re-closing an already-closed task exits 0.
-		await this.runBd(cwd, ["close", taskId, `--reason=${reason}`, "--json"], { BEADS_ACTOR: memberName });
+		// Fix 1+2: use _runBdRetry; handle close failure independently so inbox write still fires.
+		try {
+			await this._runBdRetry(cwd, ["close", taskId, `--reason=${reason}`, "--json"], { BEADS_ACTOR: memberName });
+		} catch (closeErr: any) {
+			const closeDetail = (closeErr?.stderr as string | undefined)?.trim() || closeErr?.message || String(closeErr);
+			try {
+				await this.notifyEM(
+					`Broker: bd close failed for task ${taskId} after retries — task may remain in_progress. ` +
+					`Notes were written successfully. Error: ${closeDetail}`,
+				);
+			} catch { /* session stale — silently drop */ }
+			// Do not rethrow — inbox write must still proceed
+		}
 	}
 
 	/**

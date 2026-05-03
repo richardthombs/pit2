@@ -213,11 +213,34 @@ function roleMemoryPath(cwd: string, roleSlug: string): string {
 
 // ─── Subagent persistent clients ────────────────────────────────────────────
 
-/** Timeout for a single task's `waitForIdle()` call (10 minutes). */
-const TASK_IDLE_TIMEOUT_MS = 600_000;
+/** Timeout for a single task's `waitForIdle()` call (5 minutes). */
+const TASK_IDLE_TIMEOUT_MS = 300_000;
 
 /** Timeout for the one-time memory-injection acknowledgement (30 seconds). */
 const MEMORY_INIT_TIMEOUT_MS = 30_000;
+
+/**
+ * Races `client.waitForIdle(timeoutMs)` against a 500 ms polling loop that
+ * detects unexpected child-process exit. Throws early if the process exits
+ * before the idle signal arrives, preventing indefinite hangs.
+ */
+async function waitForIdleOrExit(client: RpcClient, timeoutMs: number): Promise<void> {
+	let rejectFn!: (err: Error) => void;
+	const exitPromise = new Promise<never>((_, reject) => { rejectFn = reject; });
+
+	const poll = setInterval(() => {
+		const proc = (client as any).process as import("node:child_process").ChildProcess | null;
+		if (!proc || proc.exitCode !== null || proc.killed) {
+			rejectFn(new Error("RPC client process exited unexpectedly"));
+		}
+	}, 500);
+
+	try {
+		await Promise.race([client.waitForIdle(timeoutMs), exitPromise]);
+	} finally {
+		clearInterval(poll);
+	}
+}
 
 interface LiveMemberEntry {
 	client: RpcClient;
@@ -290,7 +313,7 @@ async function initializeClientMemory(
 		`Before your first task, here are your current memory file contents:\n\n${memContent}\n\n` +
 		`Please acknowledge this context briefly.`
 	);
-	await client.waitForIdle(MEMORY_INIT_TIMEOUT_MS);
+	await waitForIdleOrExit(client, MEMORY_INIT_TIMEOUT_MS);
 }
 
 async function getOrCreateClient(
@@ -503,7 +526,7 @@ async function runTask(
 		await client.prompt(`Task for ${memberName}: ${task}`);
 
 		// ── 8. Wait for completion ─────────────────────────────────────────────────
-		await client.waitForIdle(TASK_IDLE_TIMEOUT_MS);
+		await waitForIdleOrExit(client, TASK_IDLE_TIMEOUT_MS);
 
 		if (aborted) throw new Error("Task aborted");
 
@@ -790,21 +813,38 @@ export default function (pi: ExtensionAPI) {
 
 	let inboxPingTimer: ReturnType<typeof setTimeout> | null = null;
 
-	function scheduleInboxPing(cwd: string): void {
+	function scheduleInboxPing(cwd: string, delayMs = 10_000, retryCount = 0): void {
 		if (inboxPingTimer !== null) {
 			clearTimeout(inboxPingTimer);
 		}
 		inboxPingTimer = setTimeout(async () => {
 			inboxPingTimer = null;
-			// Only ping if this is the EM session and it's idle
+			// Only ping if this is the EM session
 			if (!broker.active) return;
-			if (typeof (pi as any).isIdle === 'function' && !(pi as any).isIdle()) return;
+			// If EM is busy, reschedule at a short interval rather than silently drop.
+			// Prevents inbox beads being orphaned when the ping fires during an active
+			// agent turn and no further user turns are expected.
+			if (typeof (pi as any).isIdle === 'function' && !(pi as any).isIdle()) {
+				scheduleInboxPing(cwd, 2_000, retryCount);
+				return;
+			}
 			try {
 				await pi.sendUserMessage("📬", { deliverAs: "followUp" });
-			} catch {
-				// Silent — inbox will drain on next user turn via agent_end
+			} catch (err: any) {
+				// sendUserMessage failed — retry with backoff up to 5 times.
+				// Inbox bead persists in the DB, so retries are safe (drainInbox is idempotent).
+				if (retryCount < 5) {
+					const backoff = Math.min(5_000 * (retryCount + 1), 30_000);
+					scheduleInboxPing(cwd, backoff, retryCount + 1);
+				} else {
+					console.error(
+						`[org] scheduleInboxPing: sendUserMessage failed after ${retryCount + 1} attempts — ` +
+						`inbox bead will be drained on next session_start or user turn. ` +
+						`Error: ${err?.message ?? err}`,
+					);
+				}
 			}
-		}, 10_000);
+		}, delayMs);
 	}
 
 	// Configure the module-level broker singleton with closure-scoped deps.
