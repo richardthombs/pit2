@@ -1,3 +1,3 @@
-# Technical Writer Memory (Tatum Larsson)
+# Technical Writer Memory (Noel Achebe)
 
 No entries yet.

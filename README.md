@@ -51,13 +51,13 @@ instructions rather than repeating general tool usage.
 
 ## Subagent spawning
 
-When a task is delegated, the extension spawns a fresh `pi` subprocess:
+When a task is delegated, the extension uses a persistent `RpcClient` subprocess per member per session. The subprocess is spawned with:
 
 ```
-pi --mode json -p --no-session [--model ...] [--tools ...] --system-prompt "" --no-context-files --append-system-prompt <tmpfile> "Task for <name>: ..."
+pi --mode rpc --no-session [--model ...] [--tools ...] --system-prompt "" --no-context-files --append-system-prompt <tmpfile>
 ```
 
-The role's system prompt is written to a temporary file, passed via `--append-system-prompt`, then deleted after the process exits. Output is streamed back as JSON events (`message_end`, `tool_result_end`).
+The role's system prompt (including the injected memory block) is written to a temporary file and passed via `--append-system-prompt`. Tasks are sent to the running subprocess over the RPC protocol — not as command-line arguments. The same subprocess is reused across multiple delegations to the same member within a session; it is only evicted and replaced when the broker needs a fresh context for a new task.
 
 ## Name pool
 

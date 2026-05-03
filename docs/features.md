@@ -300,11 +300,11 @@ Token counts are formatted with `k`/`M` suffixes (e.g. `12.3k`, `1.2M`). Fields 
 
 ---
 
-## Per-member memory
+## Role memory
 
-**What it does:** Gives every team member a persistent memory file that carries forward across delegations. Members self-maintain their own file — recording conventions, decisions, pitfalls, and codebase landmarks they discover — and that file is automatically included in their context on each subsequent delegation.
+**What it does:** Gives every role a persistent memory file that carries forward across delegations. Members self-maintain their role's file — recording conventions, decisions, pitfalls, and codebase landmarks they discover — and that file is automatically included in their context on each subsequent delegation.
 
-**Memory file location:** `.pi/memory/<member-id>.md` — one file per member, where the member ID is the member's name lowercased with spaces replaced by hyphens (e.g. `Casey Kim` → `casey-kim.md`). Files are created by the member on their first write; no setup is required.
+**Memory file location:** `.pi/memory/<role>.md` — one file per role (e.g. `typescript-engineer.md`, `qa-engineer.md`). All members hired into the same role share a single memory file. Files are created by the member on their first write; no setup is required.
 
 **Always on:** Memory injection is unconditional — there is no opt-in flag. Every member receives their memory context on every delegation, regardless of role.
 
@@ -314,10 +314,10 @@ Token counts are formatted with `k`/`M` suffixes (e.g. `12.3k`, `1.2M`). Fields 
 
 **Lifecycle:**
 - Memory files are created by the member when they first have something to record.
-- Memory persists across sessions — it is the only per-member state that does.
-- Firing a member **deletes** their memory file. If the same role is hired again under a new name, the new member starts with no memory.
+- Memory persists across sessions — it is the only persistent per-role state.
+- Firing a member does **not** delete the role memory file. The file persists as long as any member with that role exists (or beyond). Role memory is only lost if the file is manually deleted.
 
-**Out of scope:** There is no shared role-level memory — two members with the same role each have their own independent memory file. There is no automatic summarisation, section structure, or entry limit imposed by the system; members manage their own files freely.
+**Out of scope:** There is no automatic summarisation, section structure, or entry limit imposed by the system; members manage their own files freely.
 
 ---
 
@@ -330,7 +330,7 @@ Token counts are formatted with `k`/`M` suffixes (e.g. `12.3k`, `1.2M`). Fields 
 - `--system-prompt ""` — overrides the default system prompt with an empty string, preventing `.pi/SYSTEM.md` (the Engineering Manager prompt) from being loaded.
 - `--no-context-files` — prevents automatic injection of context files such as `AGENTS.md`.
 
-The agent's effective context is therefore: its role definition prompt (from `.pi/agents/<role>.md`) plus its personal memory block (from `.pi/memory/<member-id>.md` if it exists).
+The agent's effective context is therefore: its role definition prompt (from `.pi/agents/<role>.md`) plus its role memory block (from `.pi/memory/<role>.md` if it exists).
 
 **Why it matters:** Without isolation, subagents would inherit the Engineering Manager's instructions and shared project context. This produces role confusion and inflated context windows. Isolation keeps each subagent focused on its own role.
 
@@ -419,7 +419,7 @@ On successful completion, the broker records results back into beads before clos
 - A failed task is re-opened (status reset to `open`) and re-queued for the next dispatch cycle.
 - After **3 consecutive failures**, the task is set to `deferred` and the EM is notified to intervene.
 - The EM should use `bd_show` to inspect the task, fix the brief or unblock the issue, then manually reset the status to `open` to re-enable dispatch.
-- Failure counts reset when the broker is restarted with `bd_broker_start`.
+- Failure counts are in-memory and persist for the lifetime of the broker process. They are **not** reset when the broker is stopped and restarted via `bd_broker_stop` / `bd_broker_start`.
 
 ### Coexistence with `delegate`
 
