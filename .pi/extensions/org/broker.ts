@@ -237,7 +237,9 @@ export class Broker {
 	private _enqueueMemoryPhase(roleSlug: string, fn: () => Promise<void>): void {
 		const prior = this.memoryPhaseQueue.get(roleSlug) ?? Promise.resolve();
 		const next = prior.then(fn).catch(async (err) => {
-			await this.notifyEM(`Broker: unhandled memory-phase error — ${err?.message ?? err}`);
+			try {
+				await this.notifyEM(`Broker: unhandled memory-phase error — ${err?.message ?? err}`);
+			} catch { /* session stale — silently drop */ }
 		});
 		this.memoryPhaseQueue.set(roleSlug, next);
 	}
@@ -251,7 +253,9 @@ export class Broker {
 		const next = prev.then(fn);
 		// Keep the chain alive even on error so future writes are not blocked
 		this.writeQueue.set(cwd, next.catch(async (err) => {
-			await this.notifyEM(`Broker: unhandled write-queue error — ${err?.message ?? err}`);
+			try {
+				await this.notifyEM(`Broker: unhandled write-queue error — ${err?.message ?? err}`);
+			} catch { /* session stale — silently drop */ }
 		}));
 	}
 

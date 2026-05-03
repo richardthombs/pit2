@@ -797,7 +797,7 @@ export default function (pi: ExtensionAPI) {
 			inboxPingTimer = null;
 			// Only ping if this is the EM session and it's idle
 			if (!broker.active) return;
-			if (!pi.isIdle()) return;
+			if (typeof (pi as any).isIdle === 'function' && !(pi as any).isIdle()) return;
 			try {
 				await pi.sendUserMessage("📬", { deliverAs: "followUp" });
 			} catch {
@@ -851,7 +851,7 @@ export default function (pi: ExtensionAPI) {
 		widgetRefreshScheduled = true;
 		setTimeout(() => {
 			widgetRefreshScheduled = false;
-			if (lastCtx) updateWidget(lastCtx);
+			if (lastCtx) updateWidget(lastCtx).catch(() => {});
 		}, STREAM_REFRESH_INTERVAL_MS);
 	}
 
@@ -1067,7 +1067,7 @@ export default function (pi: ExtensionAPI) {
 			const state = memberState.get(memberName);
 			if (state?.status === "done") {
 				memberState.set(memberName, { status: "idle" });
-				if (lastCtx) updateWidget(lastCtx);
+				if (lastCtx) updateWidget(lastCtx).catch(() => {});
 			}
 			memberTimers.delete(memberName);
 		}, 5 * 60 * 1000);
@@ -1082,14 +1082,18 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 		if (!hasUI) return;
-		lastCtx = ctx;
-		await refreshBeadsCache(ctx.cwd);
-		ctx.ui.setWidget("org-team", (_tui: any, _theme: any) => ({
-			render(width: number): string[] {
-				return buildWidgetLines(ctx.cwd, width);
-			},
-			invalidate() {}
-		}), { placement: "belowEditor" });
+		try {
+			lastCtx = ctx;
+			await refreshBeadsCache(ctx.cwd);
+			ctx.ui.setWidget("org-team", (_tui: any, _theme: any) => ({
+				render(width: number): string[] {
+					return buildWidgetLines(ctx.cwd, width);
+				},
+				invalidate() {}
+			}), { placement: "belowEditor" });
+		} catch {
+			// Swallow — widget refresh failure is non-fatal
+		}
 	}
 
 	// ─── Inbox drain ──────────────────────────────────────────────────────────────
@@ -1188,7 +1192,7 @@ export default function (pi: ExtensionAPI) {
 		const rosterPath = getRosterPath(ctx.cwd);
 		if (fs.existsSync(rosterPath)) {
 			try {
-				rosterWatcher = fs.watch(rosterPath, () => updateWidget(ctx));
+				rosterWatcher = fs.watch(rosterPath, () => updateWidget(ctx).catch(() => {}));
 			} catch {
 				// Watcher unavailable in this environment — silently skip
 			}
@@ -1214,7 +1218,7 @@ export default function (pi: ExtensionAPI) {
 					// Non-fatal — leave contextPct at last known value
 				}
 			}
-			if (anyUpdated && lastCtx) updateWidget(lastCtx);
+			if (anyUpdated && lastCtx) updateWidget(lastCtx).catch(() => {});
 		}, 60_000);
 
 		await ensureBeadsInit(ctx.cwd, (msg, level) => ctx.ui.notify(msg, level));
@@ -1238,12 +1242,14 @@ export default function (pi: ExtensionAPI) {
 					.filter(p => fs.existsSync(p));
 				if (legacyFiles.length > 0) {
 					const fileNames = legacyFiles.map(p => path.basename(p)).join(', ');
-					ctx.ui.notify(
-						`Role memory file .pi/memory/${m.role}.md does not exist yet.\n` +
-						`Per-member files found: ${fileNames}\n` +
-						`Consider merging their contents into the role file before the next task.`,
-						'warn',
-					);
+					try {
+						ctx.ui.notify(
+							`Role memory file .pi/memory/${m.role}.md does not exist yet.\n` +
+							`Per-member files found: ${fileNames}\n` +
+							`Consider merging their contents into the role file before the next task.`,
+							'warn',
+						);
+					} catch { /* stale ctx — silently drop */ }
 				}
 			}
 		}
