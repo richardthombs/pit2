@@ -245,6 +245,29 @@ export class Broker {
 	}
 
 	/**
+	 * Runs a bd command with automatic retries on transient failures (e.g. SQLite
+	 * lock contention from concurrent subagent bd calls). Three attempts total:
+	 * immediate, then 500 ms, then 2 s. Throws the last error if all fail.
+	 */
+	private async _runBdRetry(
+		cwd: string,
+		args: string[],
+		extraEnv?: Record<string, string>,
+	): Promise<{ stdout: string; stderr: string }> {
+		const delays = [0, 500, 2000];
+		let lastErr: unknown;
+		for (const delay of delays) {
+			if (delay > 0) await new Promise(res => setTimeout(res, delay));
+			try {
+				return await this.runBd(cwd, args, extraEnv);
+			} catch (err: unknown) {
+				lastErr = err;
+			}
+		}
+		throw lastErr;
+	}
+
+	/**
 	 * Enqueue a bd write on the per-cwd serialisation chain.
 	 * The chain stays alive even if `fn` throws.
 	 */
@@ -267,25 +290,20 @@ export class Broker {
 	private async _dispatchCycle(cwd: string): Promise<void> {
 		let tasks: BeadsTask[];
 		try {
-			const { stdout } = await this.runBd(cwd, ["ready", "--type=task", "--json"]);
+			const { stdout } = await this._runBdRetry(cwd, ["ready", "--type=task", "--json"]);
 			tasks = JSON.parse(stdout) as BeadsTask[];
-		} catch (firstErr: any) {
-			// Retry once after a short delay to handle transient DB lock contention
+		} catch (err: any) {
+			const stderr = (err?.stderr as string | undefined)?.trim();
+			const sig = err?.signal as string | undefined;
+			const detail = stderr
+				|| (err?.killed && (!sig || sig === "SIGTERM") ? `process timed out` : null)
+				|| (sig ? `process killed by signal: ${sig}` : null)
+				|| err?.message
+				|| String(err);
 			try {
-				await new Promise(res => setTimeout(res, 500));
-				const { stdout } = await this.runBd(cwd, ["ready", "--type=task", "--json"]);
-				tasks = JSON.parse(stdout) as BeadsTask[];
-			} catch (err: any) {
-				const stderr = (err?.stderr as string | undefined)?.trim();
-				const detail = stderr
-					|| (err?.killed ? `process timed out (signal: ${err?.signal ?? "SIGTERM"})` : null)
-					|| err?.message
-					|| String(err);
-				try {
-					await this.notifyEM(`Broker: bd ready failed — ${detail}`);
-				} catch { /* session stale — silently drop */ }
-				return;
-			}
+				await this.notifyEM(`Broker: bd ready failed — ${detail}`);
+			} catch { /* session stale — silently drop */ }
+			return;
 		}
 
 		for (const task of tasks) {
@@ -307,11 +325,13 @@ export class Broker {
 			if ("error" in r) continue; // no available member; try next cycle
 
 			try {
-				await this.runBd(cwd, ["update", task.id, "--claim", "--json"], { BEADS_ACTOR: r.member.name });
+				await this._runBdRetry(cwd, ["update", task.id, "--claim", "--json"], { BEADS_ACTOR: r.member.name });
 			} catch (err: any) {
 				const stderr = (err?.stderr as string | undefined)?.trim();
+				const sig = err?.signal as string | undefined;
 				const detail = stderr
-					|| (err?.killed ? `process timed out (signal: ${err?.signal ?? "SIGTERM"})` : null)
+					|| (err?.killed && (!sig || sig === "SIGTERM") ? `process timed out` : null)
+					|| (sig ? `process killed by signal: ${sig}` : null)
 					|| err?.message
 					|| String(err);
 				// "already claimed" means a previous broker session dispatched this task;
@@ -431,10 +451,11 @@ export class Broker {
 					try {
 						await this.captureResult(cwd, task.id, result.output, r.member.name, role, durationSecs, result.usage);
 					} catch (err: any) {
+						const detail = (err?.stderr as string | undefined)?.trim() || err?.message || String(err);
 						await this.notifyEM(
 							`Broker: captureResult failed for task ${task.id} ("${task.title}") — ` +
 								`task is stuck in_progress and output may be lost. ` +
-								`Error: ${err?.message ?? err}`,
+								`Error: ${detail}`,
 						);
 						return;
 					}
@@ -443,9 +464,10 @@ export class Broker {
 						await this._writeMessageToInbox(cwd, task.id, task.title, role, r.member.name, result.output);
 					} catch (err: any) {
 						const header = `**Task completed: ${task.title}**\nBead \`${task.id}\` · Role: ${role} · Member: ${r.member.name}\n\n`;
+						const detail = (err?.stderr as string | undefined)?.trim() || err?.message || String(err);
 						await this.notifyEM(
 							`Broker: inbox write failed for task ${task.id} ("${task.title}") — ` +
-							`falling back to direct delivery. Error: ${err?.message ?? err}\n\n` +
+							`falling back to direct delivery. Error: ${detail}\n\n` +
 							header + result.output,
 						);
 					}
@@ -581,9 +603,10 @@ export class Broker {
 			try {
 				await this.runBd(cwd, ["update", taskId, "--status=deferred", "--json"]);
 			} catch (err: any) {
+				const detail = (err?.stderr as string | undefined)?.trim() || err?.message || String(err);
 				await this.notifyEM(
 					`Broker: failed to defer task ${taskId} after ${count} failures ` +
-						`(task may be stuck in_progress): ${err?.message ?? err}`,
+						`(task may be stuck in_progress): ${detail}`,
 				);
 				return;
 			}
@@ -596,9 +619,10 @@ export class Broker {
 			try {
 				await this.runBd(cwd, ["update", taskId, "--status=open", "--json"]);
 			} catch (err: any) {
+				const detail = (err?.stderr as string | undefined)?.trim() || err?.message || String(err);
 				await this.notifyEM(
 					`Broker: failed to re-queue task ${taskId} after failure ` +
-						`(task may be stuck in_progress): ${err?.message ?? err}`,
+						`(task may be stuck in_progress): ${detail}`,
 				);
 				return;
 			}

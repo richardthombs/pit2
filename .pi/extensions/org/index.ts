@@ -557,7 +557,8 @@ async function runBd(
 	return execFile("bd", args, {
 		cwd,
 		env: { ...process.env, BEADS_DIR: beadsDir, ...extraEnv },
-		timeout: 15_000, // 15 s — bd commands are always fast; treat timeout as an error
+		timeout: 30_000,           // 30 s u2014 generous headroom for SQLite write-lock contention
+		maxBuffer: 50 * 1024 * 1024, // 50 MB — guards against SIGPIPE on large bd ready/list output
 	});
 }
 
@@ -1150,8 +1151,10 @@ export default function (pi: ExtensionAPI) {
 				messages = JSON.parse(stdout) as InboxMessage[];
 			} catch (err: any) {
 				const stderr = (err?.stderr as string | undefined)?.trim();
+				const sig = err?.signal as string | undefined;
 				const detail = stderr
-					|| (err?.killed ? `process timed out (signal: ${err?.signal ?? "SIGTERM"})` : null)
+					|| (err?.killed && (!sig || sig === "SIGTERM") ? `process timed out` : null)
+					|| (sig ? `process killed by signal: ${sig}` : null)
 					|| err?.message
 					|| String(err);
 				console.error(`[org] drainInbox: bd list failed — ${detail}`);
@@ -1790,7 +1793,67 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.registerTool({
+		name: "bd_inbox",
+		label: "Inbox",
+		description: "Check the EM inbox for pending task completion messages. Pass drain=true to deliver them.",
+		promptSnippet: "Check EM inbox for pending messages",
+		parameters: Type.Object({
+			drain: Type.Optional(Type.Boolean({
+				description: "If true, pop and deliver one message (the topmost) per call. Call repeatedly to drain multiple messages. Default: false (list only).",
+			})),
+		}),
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			const guard = beadsGuard(ctx.cwd);
+			if (guard) return guard;
+
+			try {
+				const { stdout } = await runBd(ctx.cwd, [
+					"list",
+					"--label=pit2:message",
+					"--assignee=em/",
+					"--status=open",
+					"--json",
+				]);
+				const messages = JSON.parse(stdout) as Array<{ id: string; title: string; description?: string }>;
+
+				if (messages.length === 0) {
+					return { content: [{ type: "text", text: "Inbox is empty." }], details: { count: 0 } };
+				}
+
+				if (!params.drain) {
+					const lines = messages.map((m, i) => `${i + 1}. ${m.id} — ${m.title}`);
+					const note = messages.length > 1 ? `\n\nCall \`bd_inbox drain=true\` to pop the next message (${messages.length} remaining).` : "";
+					return {
+						content: [{
+							type: "text",
+							text: `**${messages.length} pending message(s):**\n${lines.join("\n")}\n\nCall with drain=true to deliver them.${note}`,
+						}],
+						details: { count: messages.length },
+					};
+				}
+
+				// Drain mode: pop only the topmost message (one per call)
+				const msg = messages[0];
+				try {
+					await runBd(ctx.cwd, ["close", msg.id, "--reason=delivered", "--json"]);
+				} catch (err: any) {
+					return { content: [{ type: "text", text: `Failed to ACK ${msg.id}: ${err?.message}` }] };
+				}
+				const remaining = messages.length - 1;
+				const note = remaining > 0 ? `\n\nCall \`bd_inbox drain=true\` to pop the next message (${remaining} remaining).` : "";
+				return {
+					content: [{ type: "text", text: (msg.description ?? `(message ${msg.id} had no content)`) + note }],
+					details: { count: 1 },
+				};
+			} catch (err: any) {
+				throw new Error(`bd_inbox failed: ${err?.stderr ?? err?.message ?? err}`);
+			}
+		},
+	});
+
+	pi.registerTool({
 		name: "bd_broker_start",
+
 		label: "Broker Start",
 		description:
 			"Activate the beads broker. While active, the broker monitors the beads ready queue and " +
