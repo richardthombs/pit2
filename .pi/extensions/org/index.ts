@@ -787,6 +787,25 @@ export default function (pi: ExtensionAPI) {
 	let lastCtx: any = null;
 	let reaperInterval: ReturnType<typeof setInterval> | null = null;
 
+	let inboxPingTimer: ReturnType<typeof setTimeout> | null = null;
+
+	function scheduleInboxPing(cwd: string): void {
+		if (inboxPingTimer !== null) {
+			clearTimeout(inboxPingTimer);
+		}
+		inboxPingTimer = setTimeout(async () => {
+			inboxPingTimer = null;
+			// Only ping if this is the EM session and it's idle
+			if (!broker.active) return;
+			if (!pi.isIdle()) return;
+			try {
+				await pi.sendUserMessage("📬", { deliverAs: "followUp" });
+			} catch {
+				// Silent — inbox will drain on next user turn via agent_end
+			}
+		}, 10_000);
+	}
+
 	// Configure the module-level broker singleton with closure-scoped deps.
 	broker.configure(
 		runBd,
@@ -803,6 +822,8 @@ export default function (pi: ExtensionAPI) {
 		(cwd, memberName) => liveMembers.get(liveMemberKey(cwd, memberName))?.client,
 		// evictLiveClient — removes a member's live client, forcing a fresh one on next task
 		(cwd, memberName) => { liveMembers.delete(liveMemberKey(cwd, memberName)); },
+		// scheduleInboxPing — debounced wake of the EM after inbox writes
+		(cwd) => scheduleInboxPing(cwd),
 	);
 
 	function accumulateUsage(memberName: string, delta: UsageStats): void {

@@ -143,6 +143,7 @@ export class Broker {
 	private accumulateMemberUsage!: (memberName: string, usage: UsageStats) => void;
 	private getLiveClient!: (cwd: string, memberName: string) => RpcClient | undefined;
 	private evictLiveClient!: (cwd: string, memberName: string) => void;
+	private scheduleInboxPing!: (cwd: string) => void;
 
 	constructor() {}
 
@@ -160,6 +161,7 @@ export class Broker {
 		accumulateMemberUsage: (memberName: string, usage: UsageStats) => void,
 		getLiveClient: (cwd: string, memberName: string) => RpcClient | undefined,
 		evictLiveClient: (cwd: string, memberName: string) => void,
+		scheduleInboxPing: (cwd: string) => void,
 	): void {
 		this.runBd = runBd;
 		this.resolveOrScale = resolveOrScale;
@@ -170,6 +172,7 @@ export class Broker {
 		this.accumulateMemberUsage = accumulateMemberUsage;
 		this.getLiveClient = getLiveClient;
 		this.evictLiveClient = evictLiveClient;
+		this.scheduleInboxPing = scheduleInboxPing;
 	}
 
 	/**
@@ -474,6 +477,8 @@ export class Broker {
 			`--metadata=${metadata}`,
 			"--json",
 		]);
+		// Nudge the EM to drain the inbox — debounced in index.ts
+		this.scheduleInboxPing(cwd);
 	}
 
 	/**
