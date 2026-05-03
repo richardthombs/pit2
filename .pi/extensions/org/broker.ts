@@ -303,9 +303,16 @@ export class Broker {
 			try {
 				await this.runBd(cwd, ["update", task.id, "--claim", "--json"], { BEADS_ACTOR: r.member.name });
 			} catch (err: any) {
-				await this.notifyEM(
-					`Broker: failed to claim task ${task.id} — ${err?.message ?? err}`,
-				);
+				const detail = (err?.stderr as string | undefined)?.trim() || err?.message || String(err);
+				// "already claimed" means a previous broker session dispatched this task;
+				// update memberState so we don't keep retrying, then skip.
+				if (detail.toLowerCase().includes("already claimed")) {
+					this.memberState.set(r.member.name, { status: "working", task: task.id });
+					continue;
+				}
+				try {
+					await this.notifyEM(`Broker: failed to claim task ${task.id} — ${detail}`);
+				} catch { /* session stale — silently drop */ }
 				continue;
 			}
 
