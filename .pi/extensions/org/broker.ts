@@ -276,8 +276,14 @@ export class Broker {
 				const { stdout } = await this.runBd(cwd, ["ready", "--type=task", "--json"]);
 				tasks = JSON.parse(stdout) as BeadsTask[];
 			} catch (err: any) {
-				const detail = err?.stderr?.trim() || err?.message || String(err);
-				await this.notifyEM(`Broker: bd ready failed — ${detail}`);
+				const stderr = (err?.stderr as string | undefined)?.trim();
+				const detail = stderr
+					|| (err?.killed ? `process timed out (signal: ${err?.signal ?? "SIGTERM"})` : null)
+					|| err?.message
+					|| String(err);
+				try {
+					await this.notifyEM(`Broker: bd ready failed — ${detail}`);
+				} catch { /* session stale — silently drop */ }
 				return;
 			}
 		}
@@ -303,7 +309,11 @@ export class Broker {
 			try {
 				await this.runBd(cwd, ["update", task.id, "--claim", "--json"], { BEADS_ACTOR: r.member.name });
 			} catch (err: any) {
-				const detail = (err?.stderr as string | undefined)?.trim() || err?.message || String(err);
+				const stderr = (err?.stderr as string | undefined)?.trim();
+				const detail = stderr
+					|| (err?.killed ? `process timed out (signal: ${err?.signal ?? "SIGTERM"})` : null)
+					|| err?.message
+					|| String(err);
 				// "already claimed" means a previous broker session dispatched this task;
 				// update memberState so we don't keep retrying, then skip.
 				if (detail.toLowerCase().includes("already claimed")) {

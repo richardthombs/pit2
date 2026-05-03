@@ -1149,7 +1149,11 @@ export default function (pi: ExtensionAPI) {
 				]);
 				messages = JSON.parse(stdout) as InboxMessage[];
 			} catch (err: any) {
-				const detail = (err?.stderr as string | undefined)?.trim() || err?.message || String(err);
+				const stderr = (err?.stderr as string | undefined)?.trim();
+				const detail = stderr
+					|| (err?.killed ? `process timed out (signal: ${err?.signal ?? "SIGTERM"})` : null)
+					|| err?.message
+					|| String(err);
 				console.error(`[org] drainInbox: bd list failed — ${detail}`);
 				return;
 			}
