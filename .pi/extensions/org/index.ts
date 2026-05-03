@@ -1094,6 +1094,9 @@ export default function (pi: ExtensionAPI) {
 	 * the bead's description for manual recovery.
 	 */
 	async function drainInbox(cwd: string): Promise<void> {
+		// Only run in the EM's session — subagents also load this extension and
+		// would otherwise drain the inbox into their own context window.
+		if (!broker.active) return;
 		if (beadsReady.get(cwd) !== true) return;
 
 		let messages: InboxMessage[];
