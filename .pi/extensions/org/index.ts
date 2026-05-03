@@ -1199,76 +1199,82 @@ export default function (pi: ExtensionAPI) {
 		memberState.clear();
 		memberUsage.clear();
 		memberTimers.clear();
-		const roster = loadRoster(ctx.cwd);
-		if (roster.members.length > 0) {
-			const lines = roster.members.map((m) => `  • ${m.name} (${m.role})`).join("\n");
-			ctx.ui.notify(`Your team:\n${lines}`, "info");
-		}
-		updateWidget(ctx);
 
-		// Watch roster.json so external changes (direct edits, scripts) update the widget
-		rosterWatcher?.close();
-		const rosterPath = getRosterPath(ctx.cwd);
-		if (fs.existsSync(rosterPath)) {
-			try {
-				rosterWatcher = fs.watch(rosterPath, () => updateWidget(ctx).catch(() => {}));
-			} catch {
-				// Watcher unavailable in this environment — silently skip
+		// ensureBeadsInit runs unconditionally — subagents need bd tools too
+		await ensureBeadsInit(ctx.cwd, (msg, level) => { try { ctx.ui.notify(msg, level); } catch { /* subagent — no UI */ } });
+
+		// Everything below is EM-only (interactive session with UI)
+		if (ctx.hasUI) {
+			const roster = loadRoster(ctx.cwd);
+			if (roster.members.length > 0) {
+				const lines = roster.members.map((m) => `  • ${m.name} (${m.role})`).join("\n");
+				ctx.ui.notify(`Your team:\n${lines}`, "info");
 			}
-		}
+			updateWidget(ctx);
 
-		// Start idle reaper (replaces any reaper from a prior session)
-		if (reaperInterval) clearInterval(reaperInterval);
-		reaperInterval = setInterval(async () => {
-			reapIdleClients();
-
-			// Piggyback: refresh context usage for all live members.
-			let anyUpdated = false;
-			for (const [key, entry] of liveMembers) {
-				const sepIdx = key.indexOf("::");
-				const name = sepIdx >= 0 ? key.slice(sepIdx + 2) : key;
+			// Watch roster.json so external changes (direct edits, scripts) update the widget
+			rosterWatcher?.close();
+			const rosterPath = getRosterPath(ctx.cwd);
+			if (fs.existsSync(rosterPath)) {
 				try {
-					const stats = await entry.client.getSessionStats();
-					const pct = stats.contextUsage?.percent ?? null;
-					const current = memberState.get(name) ?? { status: "idle" as MemberStatus };
-					memberState.set(name, { ...current, contextPct: pct });
-					anyUpdated = true;
+					rosterWatcher = fs.watch(rosterPath, () => updateWidget(ctx).catch(() => {}));
 				} catch {
-					// Non-fatal — leave contextPct at last known value
+					// Watcher unavailable in this environment — silently skip
 				}
 			}
-			if (anyUpdated && lastCtx) updateWidget(lastCtx).catch(() => {});
-		}, 60_000);
 
-		await ensureBeadsInit(ctx.cwd, (msg, level) => ctx.ui.notify(msg, level));
-		broker.start(ctx.cwd);
-		// Drain any messages that accumulated while the session was down
-		await drainInbox(ctx.cwd);
+			// Start idle reaper (replaces any reaper from a prior session)
+			if (reaperInterval) clearInterval(reaperInterval);
+			reaperInterval = setInterval(async () => {
+				reapIdleClients();
 
-		// Advisory: for each role in the roster, if the shared role memory file doesn't
-		// exist yet but old per-member memory files do, prompt the EM to merge them.
-		const memDir = path.join(ctx.cwd, '.pi', 'memory');
-		const advisoryRoster = loadRoster(ctx.cwd);
-		const advisoryRolesChecked = new Set<string>();
-		for (const m of advisoryRoster.members) {
-			if (advisoryRolesChecked.has(m.role)) continue;
-			advisoryRolesChecked.add(m.role);
-			const roleFile = roleMemoryPath(ctx.cwd, m.role);
-			if (!fs.existsSync(roleFile)) {
-				const membersOfRole = advisoryRoster.members.filter(x => x.role === m.role);
-				const legacyFiles = membersOfRole
-					.map(x => path.join(memDir, `${x.id}.md`))
-					.filter(p => fs.existsSync(p));
-				if (legacyFiles.length > 0) {
-					const fileNames = legacyFiles.map(p => path.basename(p)).join(', ');
+				// Piggyback: refresh context usage for all live members.
+				let anyUpdated = false;
+				for (const [key, entry] of liveMembers) {
+					const sepIdx = key.indexOf("::");
+					const name = sepIdx >= 0 ? key.slice(sepIdx + 2) : key;
 					try {
-						ctx.ui.notify(
-							`Role memory file .pi/memory/${m.role}.md does not exist yet.\n` +
-							`Per-member files found: ${fileNames}\n` +
-							`Consider merging their contents into the role file before the next task.`,
-							'warn',
-						);
-					} catch { /* stale ctx — silently drop */ }
+						const stats = await entry.client.getSessionStats();
+						const pct = stats.contextUsage?.percent ?? null;
+						const current = memberState.get(name) ?? { status: "idle" as MemberStatus };
+						memberState.set(name, { ...current, contextPct: pct });
+						anyUpdated = true;
+					} catch {
+						// Non-fatal — leave contextPct at last known value
+					}
+				}
+				if (anyUpdated && lastCtx) updateWidget(lastCtx).catch(() => {});
+			}, 60_000);
+
+			broker.start(ctx.cwd);
+			// Drain any messages that accumulated while the session was down
+			await drainInbox(ctx.cwd);
+
+			// Advisory: for each role in the roster, if the shared role memory file doesn't
+			// exist yet but old per-member memory files do, prompt the EM to merge them.
+			const memDir = path.join(ctx.cwd, '.pi', 'memory');
+			const advisoryRoster = loadRoster(ctx.cwd);
+			const advisoryRolesChecked = new Set<string>();
+			for (const m of advisoryRoster.members) {
+				if (advisoryRolesChecked.has(m.role)) continue;
+				advisoryRolesChecked.add(m.role);
+				const roleFile = roleMemoryPath(ctx.cwd, m.role);
+				if (!fs.existsSync(roleFile)) {
+					const membersOfRole = advisoryRoster.members.filter(x => x.role === m.role);
+					const legacyFiles = membersOfRole
+						.map(x => path.join(memDir, `${x.id}.md`))
+						.filter(p => fs.existsSync(p));
+					if (legacyFiles.length > 0) {
+						const fileNames = legacyFiles.map(p => path.basename(p)).join(', ');
+						try {
+							ctx.ui.notify(
+								`Role memory file .pi/memory/${m.role}.md does not exist yet.\n` +
+								`Per-member files found: ${fileNames}\n` +
+								`Consider merging their contents into the role file before the next task.`,
+								'warn',
+							);
+						} catch { /* stale ctx — silently drop */ }
+					}
 				}
 			}
 		}
