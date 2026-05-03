@@ -138,8 +138,7 @@ export class Broker {
 	private resolveOrScale!: ResolveOrScaleFn;
 	private runTask!: RunTaskFn;
 	private memberState!: Map<string, MemberState>;
-	private notifyEM!: (msg: string) => void;
-	private deliverResult!: (taskId: string, taskTitle: string, role: string, memberName: string, output: string) => void;
+	private notifyEM!: (msg: string) => Promise<void>;
 	private scheduleDoneReset!: (memberName: string) => void;
 	private accumulateMemberUsage!: (memberName: string, usage: UsageStats) => void;
 	private getLiveClient!: (cwd: string, memberName: string) => RpcClient | undefined;
@@ -156,8 +155,7 @@ export class Broker {
 		resolveOrScale: ResolveOrScaleFn,
 		runTask: RunTaskFn,
 		memberState: Map<string, MemberState>,
-		notifyEM: (msg: string) => void,
-		deliverResult: (taskId: string, taskTitle: string, role: string, memberName: string, output: string) => void,
+		notifyEM: (msg: string) => Promise<void>,
 		scheduleDoneReset: (memberName: string) => void,
 		accumulateMemberUsage: (memberName: string, usage: UsageStats) => void,
 		getLiveClient: (cwd: string, memberName: string) => RpcClient | undefined,
@@ -168,7 +166,6 @@ export class Broker {
 		this.runTask = runTask;
 		this.memberState = memberState;
 		this.notifyEM = notifyEM;
-		this.deliverResult = deliverResult;
 		this.scheduleDoneReset = scheduleDoneReset;
 		this.accumulateMemberUsage = accumulateMemberUsage;
 		this.getLiveClient = getLiveClient;
@@ -236,8 +233,8 @@ export class Broker {
 	 */
 	private _enqueueMemoryPhase(roleSlug: string, fn: () => Promise<void>): void {
 		const prior = this.memoryPhaseQueue.get(roleSlug) ?? Promise.resolve();
-		const next = prior.then(fn).catch((err) => {
-			this.notifyEM(`Broker: unhandled memory-phase error — ${err?.message ?? err}`);
+		const next = prior.then(fn).catch(async (err) => {
+			await this.notifyEM(`Broker: unhandled memory-phase error — ${err?.message ?? err}`);
 		});
 		this.memoryPhaseQueue.set(roleSlug, next);
 	}
@@ -250,8 +247,8 @@ export class Broker {
 		const prev = this.writeQueue.get(cwd) ?? Promise.resolve();
 		const next = prev.then(fn);
 		// Keep the chain alive even on error so future writes are not blocked
-		this.writeQueue.set(cwd, next.catch((err) => {
-			this.notifyEM(`Broker: unhandled write-queue error — ${err?.message ?? err}`);
+		this.writeQueue.set(cwd, next.catch(async (err) => {
+			await this.notifyEM(`Broker: unhandled write-queue error — ${err?.message ?? err}`);
 		}));
 	}
 
@@ -273,7 +270,7 @@ export class Broker {
 				tasks = JSON.parse(stdout) as BeadsTask[];
 			} catch (err: any) {
 				const detail = err?.stderr?.trim() || err?.message || String(err);
-				this.notifyEM(`Broker: bd ready failed — ${detail}`);
+				await this.notifyEM(`Broker: bd ready failed — ${detail}`);
 				return;
 			}
 		}
@@ -286,7 +283,7 @@ export class Broker {
 			// Hard-stop after 3 failures to prevent infinite retry loops.
 			const failures = this.failureCounts.get(task.id) ?? 0;
 			if (failures >= 3) {
-				this.notifyEM(
+				await this.notifyEM(
 					`Broker: task ${task.id} ("${task.title}") has failed ${failures} times and is being skipped. Manual intervention required.`,
 				);
 				continue;
@@ -299,7 +296,7 @@ export class Broker {
 			try {
 				await this.runBd(cwd, ["update", task.id, "--claim", "--json"], { BEADS_ACTOR: r.member.name });
 			} catch (err: any) {
-				this.notifyEM(
+				await this.notifyEM(
 					`Broker: failed to claim task ${task.id} — ${err?.message ?? err}`,
 				);
 				continue;
@@ -364,7 +361,7 @@ export class Broker {
 				try {
 					await liveClient.newSession();
 				} catch (err: any) {
-					this.notifyEM(
+					await this.notifyEM(
 						`Broker: newSession() failed for ${r.member.name} — evicting client to prevent context bleed. Task ${task.id} will run in a fresh session. ${err?.message ?? err}`,
 					);
 					try { await liveClient.stop(); } catch { /* ignore stop errors */ }
@@ -378,7 +375,7 @@ export class Broker {
 
 			// ── 2b. Memory update phase ────────────────────────────────────────
 			// Enqueued per role so same-role members don't race on the shared role memory file.
-			// Fire-and-forget — captureResult and deliverResult proceed immediately after enqueue.
+			// Runs independently of the write queue — captureResult and inbox write are handled separately.
 			if (result.exitCode === 0 && liveClient) {
 				const capturedClient = liveClient;
 				const capturedMemberName = r.member.name;
@@ -391,7 +388,7 @@ export class Broker {
 						);
 						await capturedClient.waitForIdle(30_000);
 					} catch (err: any) {
-						this.notifyEM(
+						await this.notifyEM(
 							`Broker: memory update phase failed for ${capturedMemberName} after task ${capturedTaskId} ("${capturedTaskTitle}") — ${err?.message ?? err}`,
 						);
 					}
@@ -410,15 +407,24 @@ export class Broker {
 					try {
 						await this.captureResult(cwd, task.id, result.output, r.member.name, role, durationSecs, result.usage);
 					} catch (err: any) {
-						this.notifyEM(
+						await this.notifyEM(
 							`Broker: captureResult failed for task ${task.id} ("${task.title}") — ` +
 								`task is stuck in_progress and output may be lost. ` +
 								`Error: ${err?.message ?? err}`,
 						);
 						return;
 					}
-					// Decision 1: deliver full output to EM after beads record is committed.
-					this.deliverResult(task.id, task.title, role, r.member.name, result.output);
+					// Write task completion to EM inbox; agent_end handler drains and delivers.
+					try {
+						await this._writeMessageToInbox(cwd, task.id, task.title, role, r.member.name, result.output);
+					} catch (err: any) {
+						const header = `**Task completed: ${task.title}**\nBead \`${task.id}\` · Role: ${role} · Member: ${r.member.name}\n\n`;
+						await this.notifyEM(
+							`Broker: inbox write failed for task ${task.id} ("${task.title}") — ` +
+							`falling back to direct delivery. Error: ${err?.message ?? err}\n\n` +
+							header + result.output,
+						);
+					}
 					// Reset member status to idle after 5 minutes
 					this.scheduleDoneReset(r.member.name);
 					// Accumulate usage stats
@@ -436,6 +442,38 @@ export class Broker {
 			this._enqueueWrite(cwd, () => this._requeueTask(cwd, task.id, reason));
 		} finally {
 		}
+	}
+
+	/**
+	 * Writes a task-completion message to the EM inbox as an ephemeral bead.
+	 * The message bead is picked up by the agent_end handler in index.ts, which
+	 * closes it (ACK) and delivers the content via sendUserMessage.
+	 *
+	 * If bd create fails, throws — caller falls back to direct notifyEM.
+	 * Must be called inside the write queue (serialised).
+	 */
+	private async _writeMessageToInbox(
+		cwd: string,
+		taskId: string,
+		taskTitle: string,
+		role: string,
+		memberName: string,
+		output: string,
+	): Promise<void> {
+		const header = `**Task completed: ${taskTitle}**\nBead \`${taskId}\` · Role: ${role} · Member: ${memberName}\n\n`;
+		const content = header + output;
+		const title = `Task completed: ${taskTitle}`;
+		const fromSlug = memberName.toLowerCase().replace(/\s+/g, "-");
+		const metadata = JSON.stringify({ task_id: taskId, role, member_name: memberName });
+		await this.runBd(cwd, [
+			"create", title,
+			"--type=task",
+			"--assignee=em/",
+			`--labels=pit2:message,msg-type:task-complete,from:${fromSlug}`,
+			`--description=${content}`,
+			`--metadata=${metadata}`,
+			"--json",
+		]);
 	}
 
 	/**
@@ -517,13 +555,13 @@ export class Broker {
 			try {
 				await this.runBd(cwd, ["update", taskId, "--status=deferred", "--json"]);
 			} catch (err: any) {
-				this.notifyEM(
+				await this.notifyEM(
 					`Broker: failed to defer task ${taskId} after ${count} failures ` +
 						`(task may be stuck in_progress): ${err?.message ?? err}`,
 				);
 				return;
 			}
-			this.notifyEM(
+			await this.notifyEM(
 				`Broker: task ${taskId} has failed ${count} times and has been DEFERRED. ` +
 					`Inspect it with bd_show, fix the brief, then re-open it manually when ready. ` +
 					`Last failure reason: ${reason}`,
@@ -532,13 +570,13 @@ export class Broker {
 			try {
 				await this.runBd(cwd, ["update", taskId, "--status=open", "--json"]);
 			} catch (err: any) {
-				this.notifyEM(
+				await this.notifyEM(
 					`Broker: failed to re-queue task ${taskId} after failure ` +
 						`(task may be stuck in_progress): ${err?.message ?? err}`,
 				);
 				return;
 			}
-			this.notifyEM(
+			await this.notifyEM(
 				`Broker: task ${taskId} failed (attempt ${count}/3) and has been re-queued. Reason: ${reason}`,
 			);
 		}

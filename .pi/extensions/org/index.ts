@@ -794,12 +794,7 @@ export default function (pi: ExtensionAPI) {
 		runTaskWithStreaming,
 		memberState,
 		// notifyEM — operational messages (failures, warnings)
-		(msg) => pi.sendUserMessage(msg, { deliverAs: "followUp" }),
-		// deliverResult — completed task output
-		(taskId, taskTitle, role, memberName, output) => {
-			const header = `**Task completed: ${taskTitle}**\nBead \`${taskId}\` · Role: ${role} · Member: ${memberName}\n\n`;
-			pi.sendUserMessage(header + output, { deliverAs: "followUp" });
-		},
+		async (msg) => { await pi.sendUserMessage(msg, { deliverAs: "followUp" }); },
 		// scheduleDoneReset — resets member status to idle after 5 min
 		(memberName) => scheduleDoneReset(memberName),
 		// accumulateMemberUsage — accumulates token usage stats
@@ -1076,6 +1071,80 @@ export default function (pi: ExtensionAPI) {
 		}), { placement: "belowEditor" });
 	}
 
+	// ─── Inbox drain ──────────────────────────────────────────────────────────────
+
+	interface InboxMessage {
+		id: string;
+		description?: string;
+		title: string;
+		labels?: string[];
+		metadata?: Record<string, string>;
+	}
+
+	/**
+	 * Polls the EM inbox for pending task-completion messages and delivers the
+	 * first one via sendUserMessage({ deliverAs: "followUp" }).
+	 *
+	 * Delivers exactly ONE message per call — the followUp turn triggers another
+	 * agent_end, which calls drainInbox again. The chain terminates naturally when
+	 * the inbox is empty.
+	 *
+	 * ACK-before-send: the bead is closed BEFORE sendUserMessage to prevent
+	 * double-delivery. If close succeeds but send fails, content is preserved in
+	 * the bead's description for manual recovery.
+	 */
+	async function drainInbox(cwd: string): Promise<void> {
+		if (beadsReady.get(cwd) !== true) return;
+
+		let messages: InboxMessage[];
+		try {
+			const { stdout } = await runBd(cwd, [
+				"list",
+				"--label=pit2:message",
+				"--assignee=em/",
+				"--status=open",
+				"--limit=1",
+				"--json",
+			]);
+			messages = JSON.parse(stdout) as InboxMessage[];
+		} catch (err: any) {
+			console.error(`[org] drainInbox: bd list failed — ${err?.message ?? err}`);
+			return;
+		}
+
+		if (messages.length === 0) return;
+
+		const msg = messages[0];
+
+		// ACK (close) BEFORE sending — at-most-once delivery semantics.
+		try {
+			await runBd(cwd, ["close", msg.id, "--reason=delivered", "--json"]);
+		} catch (err: any) {
+			console.error(`[org] drainInbox: failed to close message bead ${msg.id} — ${err?.message ?? err}`);
+			// Bead remains open and will be retried on the next agent_end.
+			return;
+		}
+
+		try {
+			await pi.sendUserMessage(
+				msg.description ?? `(message bead ${msg.id} had no content)`,
+				{ deliverAs: "followUp" },
+			);
+		} catch (err: any) {
+			// Bead already closed; content preserved in description for manual recovery.
+			console.error(
+				`[org] drainInbox: sendUserMessage failed for bead ${msg.id} — ` +
+				`content preserved in bead description. Error: ${err?.message ?? err}`,
+			);
+		}
+	}
+
+	// ─── Event handlers ───────────────────────────────────────────────────────────
+
+	pi.on("agent_end", async (_event, ctx) => {
+		await drainInbox(ctx.cwd);
+	});
+
 	// Show roster on startup and watch roster.json for external changes
 	pi.on("session_start", async (event, ctx) => {
 		if (event.reason !== "startup" && event.reason !== "resume" && event.reason !== "reload") return;
@@ -1126,6 +1195,8 @@ export default function (pi: ExtensionAPI) {
 
 		await ensureBeadsInit(ctx.cwd, (msg, level) => ctx.ui.notify(msg, level));
 		broker.start(ctx.cwd);
+		// Drain any messages that accumulated while the session was down
+		await drainInbox(ctx.cwd);
 
 		// Advisory: for each role in the roster, if the shared role memory file doesn't
 		// exist yet but old per-member memory files do, prompt the EM to merge them.
