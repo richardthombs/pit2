@@ -53,6 +53,18 @@
       "name": "Tatum Larsson",
       "role": "technical-writer",
       "hiredAt": "2026-05-02T13:51:11.288Z"
+    },
+    {
+      "id": "noel-achebe",
+      "name": "Noel Achebe",
+      "role": "technical-writer",
+      "hiredAt": "2026-05-02T19:57:37.330Z"
+    },
+    {
+      "id": "caden-zhao",
+      "name": "Caden Zhao",
+      "role": "technical-writer",
+      "hiredAt": "2026-05-02T19:57:37.772Z"
     }
   ],
   "usedNames": [
@@ -83,6 +95,8 @@
     "Drew Nakamura",
     "Rowan Fernandez",
     "Scout Petrov",
-    "Vale Hassan"
+    "Vale Hassan",
+    "Noel Achebe",
+    "Caden Zhao"
   ]
 }

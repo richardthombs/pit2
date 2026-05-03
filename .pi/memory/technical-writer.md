@@ -1,3 +1,3 @@
-# Technical Writer Memory (Darcy Oduya)
+# Technical Writer Memory (Tatum Larsson)
 
 No entries yet.
