@@ -557,7 +557,7 @@ async function runBd(
 	return execFile("bd", args, {
 		cwd,
 		env: { ...process.env, BEADS_DIR: beadsDir, ...extraEnv },
-		timeout: 30_000,           // 30 s u2014 generous headroom for SQLite write-lock contention
+		timeout: 60_000,           // 60 s — bd can be slow during Dolt checkpoint activity
 		maxBuffer: 50 * 1024 * 1024, // 50 MB — guards against SIGPIPE on large bd ready/list output
 	});
 }
