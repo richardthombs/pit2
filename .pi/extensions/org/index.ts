@@ -1135,9 +1135,24 @@ export default function (pi: ExtensionAPI) {
 				"--json",
 			]);
 			messages = JSON.parse(stdout) as InboxMessage[];
-		} catch (err: any) {
-			console.error(`[org] drainInbox: bd list failed — ${err?.message ?? err}`);
-			return;
+		} catch (firstErr: any) {
+			// Retry once after a short delay — bd can fail transiently under write load
+			try {
+				await new Promise(res => setTimeout(res, 200));
+				const { stdout } = await runBd(cwd, [
+					"list",
+					"--label=pit2:message",
+					"--assignee=em/",
+					"--status=open",
+					"--limit=1",
+					"--json",
+				]);
+				messages = JSON.parse(stdout) as InboxMessage[];
+			} catch (err: any) {
+				const detail = (err?.stderr as string | undefined)?.trim() || err?.message || String(err);
+				console.error(`[org] drainInbox: bd list failed — ${detail}`);
+				return;
+			}
 		}
 
 		if (messages.length === 0) return;
