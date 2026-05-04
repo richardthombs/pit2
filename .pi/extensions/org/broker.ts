@@ -455,7 +455,7 @@ export class Broker {
 						await capturedClient.prompt(
 							"Memory update phase: review your memory file and update it if anything from the task you just completed is worth recording. Do not include any other commentary.",
 						);
-						await waitForIdleOrExit(capturedClient, 30_000);
+						await waitForIdleOrExit(capturedClient, 120_000);
 					} catch (err: any) {
 						await this.notifyEM(
 							`Broker: memory update phase failed for ${capturedMemberName} after task ${capturedTaskId} ("${capturedTaskTitle}") — ${err?.message ?? err}`,

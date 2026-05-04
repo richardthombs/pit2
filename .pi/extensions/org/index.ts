@@ -60,22 +60,27 @@ type StreamEvent =
 interface BeadItem {
 	id: string;
 	title: string;
-	status: "open" | "in_progress";
+	status: "open" | "in_progress" | "closed";
 	issue_type: "epic" | "task";
 	parent?: string;
 	labels?: string[];
 	assignee?: string;
+	closed_at?: string;
 }
+
+const RECENTLY_CLOSED_WINDOW_MS = 15 * 60 * 1000;
 
 interface BeadsTreeNode {
 	bead: BeadItem;            // the epic itself
 	children: BeadsTreeNode[]; // sub-epics with their own children
-	tasks: BeadItem[];         // tasks directly under this epic
+	tasks: BeadItem[];         // non-closed tasks directly under this epic
+	closedTasks: BeadItem[];   // tasks closed within RECENTLY_CLOSED_WINDOW_MS
 }
 
 interface BeadsTree {
 	nodes: BeadsTreeNode[];
 	orphans: BeadItem[];
+	closedOrphans: BeadItem[]; // tasks without an active-epic parent closed within RECENTLY_CLOSED_WINDOW_MS
 }
 
 // ─── Name Pool ────────────────────────────────────────────────────────────────
@@ -625,20 +630,23 @@ async function ensureBeadsInit(
 
 // ─── Beads tree cache ────────────────────────────────────────────────────────
 
-let cachedBeadsTree: BeadsTree = { nodes: [], orphans: [] };
+let cachedBeadsTree: BeadsTree = { nodes: [], orphans: [], closedOrphans: [] };
 let beadsRefreshInFlight = false;
 
-function buildBeadsTree(items: BeadItem[]): BeadsTree {
-	const epics = items.filter(x => x.issue_type === "epic");
-	const tasks = items.filter(x => x.issue_type === "task");
+function buildBeadsTree(openItems: BeadItem[], recentlyClosed: BeadItem[] = []): BeadsTree {
+	const epics = openItems.filter(x => x.issue_type === "epic");
+	const tasks = openItems.filter(x => x.issue_type === "task");
 	const epicIds = new Set(epics.map(e => e.id));
 
 	function buildNode(epic: BeadItem): BeadsTreeNode {
 		const childEpics = epics.filter(e => e.parent === epic.id);
+		const epicTasks = tasks.filter(t => t.parent === epic.id);
+		const closedUnder = recentlyClosed.filter(t => t.parent === epic.id);
 		return {
 			bead: epic,
 			children: childEpics.map(buildNode),
-			tasks: tasks.filter(t => t.parent === epic.id),
+			tasks: epicTasks,
+			closedTasks: closedUnder,
 		};
 	}
 
@@ -655,16 +663,24 @@ function buildBeadsTree(items: BeadItem[]): BeadsTree {
 	nodes.sort((a, b) => (isNodeActive(b) ? 1 : 0) - (isNodeActive(a) ? 1 : 0));
 
 	const orphans = tasks.filter(t => !t.parent || !epicIds.has(t.parent));
+	const closedOrphans = recentlyClosed.filter(t => !t.parent || !epicIds.has(t.parent));
 
-	return { nodes, orphans };
+	return { nodes, orphans, closedOrphans };
 }
 
 async function refreshBeadsCache(cwd: string): Promise<void> {
 	if (beadsRefreshInFlight) return;
 	beadsRefreshInFlight = true;
 	try {
-		const { stdout } = await runBd(cwd, ["list", "--status=open,in_progress", "--json"]);
-		cachedBeadsTree = buildBeadsTree(JSON.parse(stdout) as BeadItem[]);
+		const since = new Date(Date.now() - RECENTLY_CLOSED_WINDOW_MS).toISOString();
+		const [openResult, closedResult] = await Promise.all([
+			runBd(cwd, ["list", "--status=open,in_progress", "--json"]),
+			runBd(cwd, ["list", "--status=closed", "--closed-after=" + since, "--json"]),
+		]);
+		cachedBeadsTree = buildBeadsTree(
+			JSON.parse(openResult.stdout) as BeadItem[],
+			JSON.parse(closedResult.stdout) as BeadItem[],
+		);
 	} catch {
 		// Keep stale cache on transient bd failures
 	} finally {
@@ -1005,7 +1021,7 @@ export default function (pi: ExtensionAPI) {
 
 	function buildBeadsLines(width: number): string[] {
 		if (width < 30) return [];
-		const { nodes, orphans } = cachedBeadsTree;
+		const { nodes, orphans, closedOrphans } = cachedBeadsTree;
 		const lines: string[] = [];
 		const MAX_DEPTH = 4;
 
@@ -1024,7 +1040,7 @@ export default function (pi: ExtensionAPI) {
 			width,
 		));
 
-		if (nodes.length === 0 && orphans.length === 0) {
+		if (nodes.length === 0 && orphans.length === 0 && closedOrphans.length === 0) {
 			lines.push("  (no open workstreams)");
 			return lines;
 		}
@@ -1043,8 +1059,8 @@ export default function (pi: ExtensionAPI) {
 			// Indent for children: continue the tree line if this node is not last
 			const childIndent = indentStr + (isLast ? "    " : "│   ");
 
-			// Render sub-epics first, then tasks; determine isLast across both groups
-			const totalItems = node.children.length + node.tasks.length;
+			// Render sub-epics first, then tasks, then closed tasks; determine isLast across all groups
+			const totalItems = node.children.length + node.tasks.length + node.closedTasks.length;
 			let itemIdx = 0;
 
 			node.children.forEach((child) => {
@@ -1065,17 +1081,27 @@ export default function (pi: ExtensionAPI) {
 				lines.push(truncateToWidth(`${taskBase}${taskTitleStr}${memberSuffix}`, width));
 				itemIdx++;
 			});
+
+			node.closedTasks.forEach((task) => {
+				const taskIsLast = itemIdx === totalItems - 1;
+				const taskConnector = taskIsLast ? "└─ " : "├─ ";
+				const taskBase = `${childIndent}${taskConnector}✓ ${task.id}  `;
+				const taskTitleAvail = Math.max(0, width - taskBase.length);
+				const taskTitleStr = taskTitleAvail > 3 ? truncateToWidth(task.title, taskTitleAvail) : "";
+				lines.push(truncateToWidth(`${taskBase}${taskTitleStr}`, width));
+				itemIdx++;
+			});
 		}
 
 		nodes.forEach((node, nodeIdx) => {
-			const isLastNode = nodeIdx === nodes.length - 1 && orphans.length === 0;
+			const isLastNode = nodeIdx === nodes.length - 1 && orphans.length === 0 && closedOrphans.length === 0;
 			renderNode(node, "  ", isLastNode, 0);
 		});
 
-		if (orphans.length > 0) {
+		if (orphans.length > 0 || closedOrphans.length > 0) {
 			lines.push(truncateToWidth("  ── other tasks", width));
 			orphans.forEach((task, idx) => {
-				const isLast = idx === orphans.length - 1;
+				const isLast = idx === orphans.length - 1 && closedOrphans.length === 0;
 				const connector = isLast ? "  └─ " : "  ├─ ";
 				const symbol = task.status === "in_progress" ? "●" : "○";
 				const member = task.status === "in_progress" ? (task.assignee ?? memberForBead(task.id)) : null;
@@ -1084,6 +1110,14 @@ export default function (pi: ExtensionAPI) {
 				const titleAvail = Math.max(0, width - rowBase.length - memberSuffix.length);
 				const titleStr = titleAvail > 3 ? truncateToWidth(task.title, titleAvail) : "";
 				lines.push(truncateToWidth(`${rowBase}${titleStr}${memberSuffix}`, width));
+			});
+			closedOrphans.forEach((task, idx) => {
+				const isLast = idx === closedOrphans.length - 1;
+				const connector = isLast ? "  └─ " : "  ├─ ";
+				const rowBase = `${connector}✓ ${task.id}  `;
+				const titleAvail = Math.max(0, width - rowBase.length);
+				const titleStr = titleAvail > 3 ? truncateToWidth(task.title, titleAvail) : "";
+				lines.push(truncateToWidth(`${rowBase}${titleStr}`, width));
 			});
 		}
 
@@ -1197,7 +1231,7 @@ export default function (pi: ExtensionAPI) {
 					|| (sig ? `process killed by signal: ${sig}` : null)
 					|| err?.message
 					|| String(err);
-				console.error(`[org] drainInbox: bd list failed — ${detail}`);
+				logInbox(cwd, `drainInbox: bd list failed — ${detail}`);
 				return;
 			}
 		}
@@ -1210,7 +1244,7 @@ export default function (pi: ExtensionAPI) {
 		try {
 			await runBd(cwd, ["close", msg.id, "--reason=delivered", "--json"]);
 		} catch (err: any) {
-			console.error(`[org] drainInbox: failed to close message bead ${msg.id} — ${err?.message ?? err}`);
+			logInbox(cwd, `drainInbox: failed to close message bead ${msg.id} — ${err?.message ?? err}`);
 			// Bead remains open and will be retried on the next agent_end.
 			return;
 		}
@@ -1222,17 +1256,17 @@ export default function (pi: ExtensionAPI) {
 			);
 		} catch (err: any) {
 			// Bead already closed; content preserved in description for manual recovery.
-			console.error(
-				`[org] drainInbox: sendUserMessage failed for bead ${msg.id} — ` +
-				`content preserved in bead description. Error: ${err?.message ?? err}`,
-			);
+			logInbox(cwd, `drainInbox: sendUserMessage failed for bead ${msg.id} — content preserved in bead description. Error: ${err?.message ?? err}`);
 		}
 	}
 
 	// ─── Event handlers ───────────────────────────────────────────────────────────
 
 	pi.on("agent_end", async (_event, ctx) => {
-		await drainInbox(ctx.cwd);
+		// Belt-and-suspenders: drainInbox is EM-only. broker.active is the primary
+		// guard, but a subagent that calls bd_broker_start would set it to true.
+		if (ctx.hasUI) await drainInbox(ctx.cwd);
+		if (ctx.hasUI) updateWidget(ctx).catch(() => {});
 	});
 
 	// Show roster on startup and watch roster.json for external changes
@@ -1905,6 +1939,10 @@ export default function (pi: ExtensionAPI) {
 		async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
 			const guard = beadsGuard(ctx.cwd);
 			if (guard) return guard;
+			if (!ctx.hasUI) return {
+				content: [{ type: "text", text: "bd_broker_start is only available in the EM session." }],
+				details: {},
+			};
 			if (broker.active) {
 				return {
 					content: [{ type: "text", text: "Broker is already active." }],

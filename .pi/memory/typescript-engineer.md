@@ -32,6 +32,13 @@
 - "Already claimed" in `_dispatchCycle`: member stays idle, warning sent to EM — do NOT set memberState to working
 - Beads has **no claim-expiry mechanism** — a claimed task stays `in_progress` until manually closed; the EM must run `bd close <id>` to release it
 
+## Logging
+
+- `logInbox(cwd, msg)` is defined in `utils.ts` and imported in `index.ts` — appends a timestamped `[org:inbox]` line to `<cwd>/.pi/logs/org-inbox.log`; silently swallows write errors; creates the log dir on first use
+- `utils.ts` restricts to "no pi-runtime imports" but Node.js built-ins (`node:fs`, `node:path`) are fine — `logInbox` uses both
+- `drainInbox` uses `logInbox` for all error paths (bd list failure ~line 1234, close failure ~line 1247, sendUserMessage failure ~line 1259)
+- Remaining `console.` lines in `index.ts`: ~383 (`console.warn`) and ~856 (`console.error` in `scheduleInboxPing`) — both outside `drainInbox`, intentional, leave alone
+
 ## TypeScript/Compilation
 
 - Extensions loaded via `jiti` — no compilation step needed; `tsc --noEmit` for type-checking only
@@ -39,8 +46,14 @@
 
 ## Beads Widget
 
-- `BeadsTree` holds `nodes: BeadsTreeNode[]` (root epics only) and `orphans: BeadItem[]` (tasks without an epic parent in the list)
-- `BeadsTreeNode` has `bead`, `children`, `tasks` — supports recursive nesting at any depth
+- `BeadsTree` holds `nodes: BeadsTreeNode[]` (root epics only), `orphans: BeadItem[]` (tasks without an epic parent), and `closedOrphans: BeadItem[]` (recently-closed tasks without an epic parent)
+- `BeadsTreeNode` has `bead`, `children`, `tasks`, and `closedTasks: BeadItem[]` (recently-closed tasks under this node)
+- `BeadItem.status` includes `"closed"`; `BeadItem.closed_at?: string` for RFC3339 close timestamp
+- `RECENTLY_CLOSED_WINDOW_MS = 15 * 60 * 1000` — closed tasks within this window appear in widget with `✓` symbol
+- `refreshBeadsCache` fires two parallel `bd list` queries: open/in_progress + `--closed-after=<RFC3339>`; both wrapped in a single `try/catch` — if either throws, the entire refresh is skipped (cache preserved stale)
+- `buildBeadsTree`: epics exclude closed ones; tasks split into `tasks` (non-closed) and `closedTasks` (closed) per node; same split for orphans
 - `buildBeadsLines` uses a recursive `renderNode(node, indentStr, isLast, depth)` with `MAX_DEPTH = 4`
 - `indentStr` accumulates by appending `"│   "` (not last) or `"    "` (last) at each depth level — produces correct box-drawing continuation lines
 - `itemIdx` is unified across `children` and `tasks` in `renderNode` so the last item (regardless of type) correctly gets `"└─ "`
+- `isLastNode` accounts for `closedOrphans` when determining last item in the orphan section
+- `agent_end` handler calls `drainInbox` then `updateWidget` (EM-only via `ctx.hasUI`), unconditionally after drain completes
