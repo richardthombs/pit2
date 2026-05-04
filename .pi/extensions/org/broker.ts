@@ -13,6 +13,7 @@
  */
 
 import * as path from "node:path";
+import { logInbox } from "./utils.js";
 import { RpcClient } from "@mariozechner/pi-coding-agent";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -383,7 +384,7 @@ export class Broker {
 			});
 
 			// Fire and forget — runTask is NOT serialised through writeQueue.
-			this._runAndClose(cwd, task, role, r).catch(() => {});
+			this._runAndClose(cwd, task, role, r).catch((err) => { logInbox(cwd, `_runAndClose failed: ${err?.message ?? err}`); });
 		}
 	}
 

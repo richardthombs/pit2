@@ -3,6 +3,9 @@
  * No pi-runtime imports — safe to test in isolation.
  */
 
+import * as fs from "node:fs";
+import * as path from "node:path";
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface UsageStats {
@@ -43,6 +46,23 @@ export const VALID_MEMORY_SECTIONS = [
 	"Miscellaneous",
 ];
 export const MAX_MEMORY_ITEMS_PER_SECTION = 10;
+
+// ─── File logging ────────────────────────────────────────────────────────────
+
+/**
+ * Appends a timestamped line to `<cwd>/.pi/logs/org-inbox.log`.
+ * Creates the logs/ directory on first use. Silently swallows write errors.
+ */
+export function logInbox(cwd: string, message: string): void {
+	try {
+		const logDir = path.join(cwd, ".pi", "logs");
+		fs.mkdirSync(logDir, { recursive: true });
+		const line = `[${new Date().toISOString()}] [org:inbox] ${message}\n`;
+		fs.appendFileSync(path.join(logDir, "org-inbox.log"), line, "utf-8");
+	} catch {
+		// Cannot log a logging failure — silently swallow
+	}
+}
 
 export function extractMemoryEntries(output: string): {
 	entries: { section: string; entry: string }[];

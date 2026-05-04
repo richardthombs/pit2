@@ -28,7 +28,7 @@ import type { RpcClientOptions } from "@mariozechner/pi-coding-agent";
 import type { AssistantMessage, TextContent } from "@mariozechner/pi-ai";
 import { truncateToWidth } from "@mariozechner/pi-tui";
 import { Type } from "typebox";
-import { UsageStats, fmtTokens, formatUsage } from "./utils.js";
+import { UsageStats, fmtTokens, formatUsage, logInbox } from "./utils.js";
 import { broker } from "./broker.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -390,7 +390,7 @@ function reapIdleClients(): void {
 	for (const [key, entry] of liveMembers) {
 		if (now - entry.lastUsed > IDLE_TIMEOUT_MS) {
 			liveMembers.delete(key);
-			entry.client.stop().catch(() => {});
+			entry.client.stop().catch((err) => { logInbox(key.split("::")[0], `client.stop failed (reaper): ${err?.message ?? err}`); });
 		}
 	}
 }
@@ -400,7 +400,7 @@ async function stopLiveClient(cwd: string, memberName: string): Promise<void> {
 	const entry = liveMembers.get(key);
 	if (entry) {
 		liveMembers.delete(key);
-		await entry.client.stop().catch(() => {});
+		await entry.client.stop().catch((err) => { logInbox(cwd, `client.stop failed (stopLiveClient): ${err?.message ?? err}`); });
 	}
 }
 
@@ -517,7 +517,7 @@ async function runTask(
 	if (signal) {
 		abortHandler = () => {
 			aborted = true;
-			client.abort().catch(() => {});
+			client.abort().catch((err) => { logInbox(cwd, `client.abort failed: ${err?.message ?? err}`); });
 		};
 		if (signal.aborted) {
 			abortHandler();
@@ -555,7 +555,7 @@ async function runTask(
 		// Treat any non-abort error as a potential client crash — remove so next call recreates
 		if (liveMembers.get(key)?.client === client) {
 			liveMembers.delete(key);
-			client.stop().catch(() => {});
+			client.stop().catch((err) => { logInbox(cwd, `client.stop failed (crash cleanup): ${err?.message ?? err}`); });
 		}
 
 		const wrapper = new Error(`Member process crashed or disconnected — client removed: ${err?.message ?? err}`);
@@ -853,11 +853,7 @@ export default function (pi: ExtensionAPI) {
 					const backoff = Math.min(5_000 * (retryCount + 1), 30_000);
 					scheduleInboxPing(cwd, backoff, retryCount + 1);
 				} else {
-					console.error(
-						`[org] scheduleInboxPing: sendUserMessage failed after ${retryCount + 1} attempts — ` +
-						`inbox bead will be drained on next session_start or user turn. ` +
-						`Error: ${err?.message ?? err}`,
-					);
+					logInbox(cwd, `scheduleInboxPing: sendUserMessage failed after ${retryCount + 1} attempts — inbox bead will be drained on next session_start or user turn. Error: ${err?.message ?? err}`);
 				}
 			}
 		}, delayMs);
@@ -908,7 +904,7 @@ export default function (pi: ExtensionAPI) {
 		widgetRefreshScheduled = true;
 		setTimeout(() => {
 			widgetRefreshScheduled = false;
-			if (lastCtx) updateWidget(lastCtx).catch(() => {});
+			if (lastCtx) updateWidget(lastCtx).catch((err) => { logInbox(lastCtx?.cwd, `updateWidget failed (scheduleWidgetRefresh): ${err?.message ?? err}`); });
 		}, STREAM_REFRESH_INTERVAL_MS);
 	}
 
@@ -1142,7 +1138,7 @@ export default function (pi: ExtensionAPI) {
 			const state = memberState.get(memberName);
 			if (state?.status === "done") {
 				memberState.set(memberName, { status: "idle" });
-				if (lastCtx) updateWidget(lastCtx).catch(() => {});
+				if (lastCtx) updateWidget(lastCtx).catch((err) => { logInbox(lastCtx?.cwd, `updateWidget failed (memberTimer): ${err?.message ?? err}`); });
 			}
 			memberTimers.delete(memberName);
 		}, 5 * 60 * 1000);
@@ -1266,7 +1262,7 @@ export default function (pi: ExtensionAPI) {
 		// Belt-and-suspenders: drainInbox is EM-only. broker.active is the primary
 		// guard, but a subagent that calls bd_broker_start would set it to true.
 		if (ctx.hasUI) await drainInbox(ctx.cwd);
-		if (ctx.hasUI) updateWidget(ctx).catch(() => {});
+		if (ctx.hasUI) updateWidget(ctx).catch((err) => { logInbox(ctx.cwd, `updateWidget failed (agent_end): ${err?.message ?? err}`); });
 	});
 
 	// Show roster on startup and watch roster.json for external changes
@@ -1294,7 +1290,7 @@ export default function (pi: ExtensionAPI) {
 			const rosterPath = getRosterPath(ctx.cwd);
 			if (fs.existsSync(rosterPath)) {
 				try {
-					rosterWatcher = fs.watch(rosterPath, () => updateWidget(ctx).catch(() => {}));
+					rosterWatcher = fs.watch(rosterPath, () => updateWidget(ctx).catch((err) => { logInbox(ctx.cwd, `updateWidget failed (rosterWatcher): ${err?.message ?? err}`); }));
 				} catch {
 					// Watcher unavailable in this environment — silently skip
 				}
@@ -1320,7 +1316,7 @@ export default function (pi: ExtensionAPI) {
 						// Non-fatal — leave contextPct at last known value
 					}
 				}
-				if (anyUpdated && lastCtx) updateWidget(lastCtx).catch(() => {});
+				if (anyUpdated && lastCtx) updateWidget(lastCtx).catch((err) => { logInbox(lastCtx?.cwd, `updateWidget failed (contextPct poll): ${err?.message ?? err}`); });
 			}, 60_000);
 
 			broker.start(ctx.cwd);
@@ -1373,7 +1369,7 @@ export default function (pi: ExtensionAPI) {
 		broker.stop();
 
 		// Stop all live member clients
-		await Promise.all([...liveMembers.values()].map(e => e.client.stop().catch(() => {})));
+		await Promise.all([...liveMembers.values()].map(e => e.client.stop().catch((err) => { logInbox(lastCtx?.cwd, `client.stop failed (session_shutdown): ${err?.message ?? err}`); })));
 		liveMembers.clear();
 	});
 

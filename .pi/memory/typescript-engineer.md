@@ -34,10 +34,12 @@
 
 ## Logging
 
-- `logInbox(cwd, msg)` is defined in `utils.ts` and imported in `index.ts` — appends a timestamped `[org:inbox]` line to `<cwd>/.pi/logs/org-inbox.log`; silently swallows write errors; creates the log dir on first use
-- `utils.ts` restricts to "no pi-runtime imports" but Node.js built-ins (`node:fs`, `node:path`) are fine — `logInbox` uses both
-- `drainInbox` uses `logInbox` for all error paths (bd list failure ~line 1234, close failure ~line 1247, sendUserMessage failure ~line 1259)
-- Remaining `console.` lines in `index.ts`: ~383 (`console.warn`) and ~856 (`console.error` in `scheduleInboxPing`) — both outside `drainInbox`, intentional, leave alone
+- `logInbox(cwd, msg)` is defined and exported from `utils.ts`, imported in both `index.ts` and `broker.ts` — appends `[ISO] [org:inbox] message\n` to `<cwd>/.pi/logs/org-inbox.log`; creates log dir on first use; silently swallows write errors
+- `utils.ts` now imports `node:fs` and `node:path` (added for `logInbox`); still no pi-runtime imports
+- All `.catch()` handlers in `index.ts` and `broker.ts` use `logInbox` — no `console.error` in any catch handler
+- `reapIdleClients` is module-level (outside the extension closure) — no `lastCtx` access; extract `cwd` from map key via `key.split("::")[0]`
+- `session_shutdown` handler has no `ctx` parameter — use `lastCtx?.cwd` for logging
+- Remaining `console.` lines in `index.ts`: ~383 (`console.warn`) and ~856 (`console.error` in `scheduleInboxPing` non-catch else branch) — intentional, leave alone
 
 ## TypeScript/Compilation
 
