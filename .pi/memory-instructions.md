@@ -28,8 +28,4 @@ If yes, store it. This includes facts that are hard to rediscover, correct patte
 
 Remove entries that are no longer true, refer to deleted code, or contain stale line numbers. A wrong memory is worse than no memory.
 
-### Cross-agent duplication
-
-If a fact belongs in a shared reference (e.g. team-wide CLI flags), note its location rather than copying the content. Don't store facts that every agent on the team will independently re-discover and write down identically.
-
 ---
