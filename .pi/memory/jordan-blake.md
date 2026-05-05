@@ -6,7 +6,24 @@
 - Pattern: `memberName` and `memPath` are the two template placeholders used in the injected block.
 - Memory file pre-population: lines 250–255 append the agent's existing memory file contents directly after the injected block, so agents see their own history without needing to read it themselves at runtime (though they are still instructed to read it for freshness/safety).
 
+## Observations — Memory File Quality (2026-05-05)
+- Most agents store task-narrative content ("reviewed and approved", "found and fixed") that reads as an audit log, not operational knowledge
+- Role-based YAML frontmatter (`version`, `entry_count`, `last_updated`) is leftover from old system — noise
+- The same facts appear in multiple agents' memories (e.g. `--system-prompt "" --no-context-files` appears in 5+ files)
+- Identity sections ("I am Morgan Ellis, QA Engineer...") are pure noise
+- High-value content exists but is buried: exact CLI flags, event type names, non-obvious framework behaviors
+- Line numbers in memory drift and become misinformation (typescript-engineer has stale line refs)
+
 ## Decisions Made
+
+### 2026-05-05 — Memory instructions heuristic revised
+**Change:** Replaced "would finding this again require grep, read, or bash?" heuristic with forward-looking cost test: "Would having this upfront save meaningful tool calls or tokens on a future task?"
+
+**Rationale:** Old test anchored on discovery method; new test is broader — captures correct patterns, unexpected behaviours, and non-obvious constraints, not just hard-to-find facts.
+
+**File:** `.pi/memory-instructions.md` — full instructions now live there (identity block + what-to-store guidance + pruning + cross-agent dedup).
+
+---
 
 ### 2026-05-05 — Memory update ordering fix
 **Problem:** Agents writing commentary about their memory update after their final response corrupted the EM's task-result extraction (which takes the last assistant text block).
