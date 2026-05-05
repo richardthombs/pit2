@@ -3,20 +3,17 @@
 ## Codebase Landmarks
 
 - **Main extension entry:** `/Users/richardthombs/dev/pit2/.pi/extensions/org/index.ts`
-- **`runTask()` function:** starts around line ~283, builds the args array at line 292
+- **`runTask()` function:** search for `async function runTask` in the entry file above
 
-## Decisions / Changes Made
+## CLI Flags for Subagent Spawning
 
-### 2026-04-30 — Subagent context leak fix (line 292)
-Changed the `args` initialisation in `runTask()` from:
+When `runTask()` spawns a pi subagent, the args array must include these flags to prevent the parent agent's context from leaking into subagents:
+
 ```typescript
-const args: string[] = ["--mode", "json", "-p", "--no-session"];
+"--system-prompt", "", "--no-context-files"
 ```
-to:
-```typescript
-const args: string[] = ["--mode", "json", "-p", "--no-session", "--system-prompt", "", "--no-context-files"];
-```
-- `--system-prompt ""` — overrides `discoverSystemPromptFile()` so `.pi/SYSTEM.md` (the Engineering Manager prompt) is NOT auto-injected into subagents
+
+- `--system-prompt ""` — overrides `discoverSystemPromptFile()` so `.pi/SYSTEM.md` (the Engineering Manager prompt) is **not** auto-injected into subagents
 - `--no-context-files` — prevents `AGENTS.md` / `CLAUDE.md` from being walked and injected
 
-Both flags verified in `@mariozechner/pi-coding-agent/dist/cli/args.js`.
+Both flags are defined in `@mariozechner/pi-coding-agent/dist/cli/args.js`. Without them, every subagent inherits the EM system prompt and context files.

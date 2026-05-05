@@ -1,38 +1,18 @@
 # Jordan Blake — Memory
 
-## Codebase Landmarks
+## Key File Locations
 
-- Memory injection block: `.pi/extensions/org/index.ts` line 249 — template literal inside `delegateToMember()`.
-- Pattern: `memberName` and `memPath` are the two template placeholders used in the injected block.
-- Memory file pre-population: lines 250–255 append the agent's existing memory file contents directly after the injected block, so agents see their own history without needing to read it themselves at runtime (though they are still instructed to read it for freshness/safety).
+- Identity/memory injection: `.pi/extensions/org/index.ts`, inside `delegateToMember()`.
+- Canonical memory instructions: `.pi/memory-instructions.md`.
 
-## Observations — Memory File Quality (2026-05-05)
-- Most agents store task-narrative content ("reviewed and approved", "found and fixed") that reads as an audit log, not operational knowledge
-- Role-based YAML frontmatter (`version`, `entry_count`, `last_updated`) is leftover from old system — noise
-- The same facts appear in multiple agents' memories (e.g. `--system-prompt "" --no-context-files` appears in 5+ files)
-- Identity sections ("I am Morgan Ellis, QA Engineer...") are pure noise
-- High-value content exists but is buried: exact CLI flags, event type names, non-obvious framework behaviors
-- Line numbers in memory drift and become misinformation (typescript-engineer has stale line refs)
+## Non-obvious Behaviours
 
-## Decisions Made
+- Template placeholders in the injection block are `${memberName}` and `${memPath}` — only these two.
+- Agent memory files are pre-populated directly into the system prompt before delegation, so agents receive their history without needing to read it. They are still told to read for freshness/safety.
+- Memory update must happen *before* the final response (not after) — tool calls after the final assistant text block corrupt EM task-result extraction.
 
-### 2026-05-05 — Memory instructions heuristic revised
-**Change:** Replaced "would finding this again require grep, read, or bash?" heuristic with forward-looking cost test: "Would having this upfront save meaningful tool calls or tokens on a future task?"
+## Canonical Identity/Memory Injection Block Text
 
-**Rationale:** Old test anchored on discovery method; new test is broader — captures correct patterns, unexpected behaviours, and non-obvious constraints, not just hard-to-find facts.
-
-**File:** `.pi/memory-instructions.md` — full instructions now live there (identity block + what-to-store guidance + pruning + cross-agent dedup).
-
----
-
-### 2026-05-05 — Memory update ordering fix
-**Problem:** Agents writing commentary about their memory update after their final response corrupted the EM's task-result extraction (which takes the last assistant text block).
-
-**Solution adopted (option 1):** Reword the injection block so agents are told to run write/edit tool calls *before* writing their final response, with an explicit "no commentary, no confirmation" rule and a hard stop after the final response.
-
-**New block text (for line 249):**
 ```
 \n\n---\n## Your Identity & Memory\n\nYour name is ${memberName}. Your memory file is at ${memPath}.\n\nAt the start of each task, read your memory file if it exists to recall relevant context.\n\nBefore writing your final response: silently update your memory file using write/edit tools — no commentary, no confirmation. After your final response, produce no further text.
 ```
-
-Key structural change: "At the end of each task" → "Before writing your final response" sequences the tool call correctly.

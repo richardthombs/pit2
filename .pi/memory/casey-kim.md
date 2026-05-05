@@ -9,20 +9,22 @@ TypeScript engineer specialising in pi coding agent extensions. Part of the pit2
 - Language: TypeScript (via jiti — no compilation step)
 - Schema: typebox for tool parameters
 
-## Key codebase landmarks
+## Key file locations
 - `.pi/extensions/org/index.ts` — main org extension: delegate tool, hire/fire commands, team widget, roster helpers
 - `.pi/extensions/org/utils.ts` — pure utilities: UsageStats, fmtTokens, formatUsage (no pi-runtime deps)
 - `.pi/roster.json` — team member persistence
 - `.pi/memory/<member-name>.md` — per-member live memory files
-- `.pi/memory-instructions.md` — externalized memory instruction template (placeholders: `${memberName}`, `${memPath}`); read fresh each delegation call; separator `\n\n---\n` stays in code; file ends with a trailing `---` separator line
-- `tests/extensions/org/utils.test.ts` — unit tests for pure utils + exported helpers from index.ts
+- `.pi/memory-instructions.md` — memory instruction template injected into each delegation prompt
+- `tests/extensions/org/utils.test.ts` — unit tests for pure utils + exported helpers from index.ts (41 tests)
 
-## Observations & decisions
-- 2026-04-30: First task. Confirmed that `delegate` is a manager-layer construct described in AGENTS.md, not a tool available to me as a team member. I am on the *receiving* end of delegation.
-- 2026-05-05: Removed unused `.pi/inbox.jsonl` and `.pi/logs/` artifacts. Confirmed zero runtime references in all `.ts` and `.md` files (`.beads/` history referenced `logInbox`/`.pi/logs/` but those changes were never in git — `utils.ts` and `index.ts` had no trace of `logInbox`). Removed `# Runtime artifacts` block from `.gitignore`. Committed as `46c07ab`.
-- 2026-05-05: Removed two dead event listeners from `processLine` in index.ts: (1) `tool_result_end` block — event type doesn't exist in pi framework, tool results arrive via `message_end`; (2) broken streaming indicator checking `tool_use`/`tool_use_start`/`tool_call` — replaced with correct `tool_execution_start` + `ev.toolName` (confirmed from `agent-session.js` dist). All 41 tests still pass.
-- 2026-05-05: Removed `<!-- MEMORY -->` block dead code. Deleted: `extractMemoryEntries()` + constants (`MEMORY_DIR`, `VALID_MEMORY_SECTIONS`, `MAX_MEMORY_ITEMS_PER_SECTION`) from utils.ts; `getMemoryPath()` + `appendToRoleMemory()` from index.ts; `memory?: boolean` field from `AgentConfig` interface; `memory:` line from `loadAgentConfig`; entire `extractMemoryEntries` describe block from utils.test.ts. All 41 tests still pass.
-- 2026-05-05: Updated `## Your Identity & Memory` prompt block in index.ts (line ~249). New wording: instructs agent to read memory at task start, then silently update before final response with no commentary/confirmation — replacing the older "end of each task" free-form guidance. All 41 tests still pass.
-- 2026-05-05: Externalized memory instruction text to `.pi/memory-instructions.md`. `runTask` reads the file fresh each call and applies `${memberName}`/`${memPath}` substitutions via `.replace()`; falls back to the same hardcoded string if file is missing/unreadable. `\n\n---\n` separator remains in code. All 41 tests still pass.
-- 2026-05-05: Updated `.pi/memory-instructions.md` — added trailing `---` separator at end of file (was missing). No code changes; all 41 tests still pass.
-- 2026-05-05: Removed `### Cross-agent duplication` section from `.pi/memory-instructions.md`. No code changes; all 41 tests still pass.
+## Non-obvious framework facts
+- `tool_result_end` event does **not** exist in the pi framework — tool results arrive via `message_end`
+- Streaming tool indicator uses `tool_execution_start` event with `ev.toolName` field (confirmed from `agent-session.js` dist)
+- `delegate` is a manager-layer construct (described in AGENTS.md), not a tool available to team members — I am on the *receiving* end of delegation
+
+## memory-instructions.md mechanics
+- `runTask` in index.ts reads the file fresh on every delegation call
+- Substitutions applied: `${memberName}` → member name, `${memPath}` → absolute memory file path
+- Falls back to a hardcoded string if the file is missing/unreadable
+- The `\n\n---\n` separator between system prompt and memory instructions is hardcoded in index.ts (not in the file)
+- The file itself ends with a trailing `---` separator line

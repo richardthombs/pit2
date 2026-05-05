@@ -11,31 +11,14 @@ I am Morgan Ellis, QA Engineer embedded in the pit2 multi-agent engineering orga
 - Agent role definitions: `.pi/agents/<role>.md`
 - Per-member memory: `.pi/memory/<member-name>.md`
 
-## Key decisions & history
-- 2026-05-05: Dead code removal reviewed and approved.
-  - `appendToRoleMemory()` and `extractMemoryEntries` (plus related helpers/constants) were removed from `index.ts` and `utils.ts`.
-  - The `<!-- MEMORY -->` block mechanism was never wired into the execution path — confirmed dead by Casey Kim and others before removal.
-  - The live per-member memory system (`memberMemoryPath()`, memory injection block in `runTask`) is intact and unchanged.
-  - No references to the removed symbols remain in any `.ts`/`.js` source files.
-  - All 41 tests pass after removal.
-  - `.pi/memory/*.md` files contain historical notes mentioning the old names — these are benign documentation artefacts, not code.
+## Non-obvious framework behaviours
+- Correct event type for streaming tool indicator: `ev.type === "tool_execution_start"`, field is `ev.toolName`. Old names (`tool_use`, `tool_use_start`, `tool_call`, `ev.name`, `ev.tool_name`, `ev.tool`) are all wrong and do not fire.
+- `tool_result_end` event type does not exist in the framework — never use it.
+- `tool_use` string appears in `utils.test.ts` as test data for content block filtering — not event type matching. Not a bug.
+- `.pi/memory/*.md` files may reference old/removed symbol names (`appendToRoleMemory`, `extractMemoryEntries`) — benign documentation artefacts, not live code.
 
-- 2026-05-05: Dead event listener removal reviewed and approved.
-  - Removed `tool_result_end` listener: was pushing `ev.message` to the `messages` array, but this event type does not exist in the framework — dead since initial authorship.
-  - Fixed streaming tool indicator: old code checked `ev.name ?? ev.tool_name ?? ev.tool` against event types `tool_use`, `tool_use_start`, `tool_call` — all wrong. Replaced with correct `ev.type === "tool_execution_start"` + `ev.toolName` field.
-  - `message_end` message collection and full token accumulation block are 100% intact.
-  - No references to the removed/old event names remain in any `.ts` source file. One `tool_use` string in `utils.test.ts` line ~246 is test data for content block filtering, not event type matching — benign.
-  - All 41 tests pass after change.
-
-- 2026-05-05: Memory prompt block update reviewed and approved.
-  - Single line changed: `let memBlock = …` assignment in `runTask` (line 249 of `index.ts`).
-  - New block instructs agents to: (1) read memory at task start, (2) silently update memory via tool calls before final response with no commentary/confirmation, (3) produce no further text after final response.
-  - All three instructions confirmed present verbatim in the new template literal.
-  - Surrounding injection structure (memPath binding, ${memberName}/${memPath} placeholders, conditional append, non-fatal catch) verified intact.
-  - All 41 tests pass.
-
-## QA patterns observed
-- `withFileMutationQueue` used for roster writes (safe) but bypassed inside `withScalingLock` during auto-hire (intentional, documented comment in code).
-- Abort signal threads through to `spawn` but uses `SIGTERM` + 5s SIGKILL fallback — no leak risk.
-- Memory read failure is non-fatal (try/catch, proceeds without memory block).
-- Event handlers in `processLine` use simple string equality on `ev.type` — no registration/unregistration lifecycle, just inline parsing.
+## QA patterns & invariants
+- `withFileMutationQueue` used for roster writes (safe) but intentionally bypassed inside `withScalingLock` during auto-hire — documented in code, not a bug.
+- Abort signal threads through to `spawn` via SIGTERM + 5s SIGKILL fallback — no leak risk.
+- Memory read failure in `runTask` is non-fatal: try/catch, proceeds without memory block if file missing.
+- `processLine` event handlers use simple `ev.type` string equality — no registration/unregistration lifecycle, just inline parsing.
