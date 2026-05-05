@@ -31,39 +31,4 @@ export function formatUsage(u: UsageStats): string {
 	return parts.join(" ");
 }
 
-// ─── Memory helpers (pure — no pi-runtime deps) ───────────────────────────────
-
-export const MEMORY_DIR = "memory";
-export const VALID_MEMORY_SECTIONS = [
-	"Conventions",
-	"Decisions",
-	"Pitfalls",
-	"EM Preferences",
-	"Codebase Landmarks",
-	"Miscellaneous",
-];
-export const MAX_MEMORY_ITEMS_PER_SECTION = 10;
-
-export function extractMemoryEntries(output: string): {
-	entries: { section: string; entry: string }[];
-	cleanOutput: string;
-} {
-	const entries: { section: string; entry: string }[] = [];
-	const cleanOutput = output
-		.replace(
-			/<!--\s*MEMORY\s*\nsection:\s*([^\n]+)\nentry:\s*([^\n]+)\s*-->/g,
-			(_, section, entry) => {
-				const s = section.trim();
-				const e = entry.trim();
-				if (VALID_MEMORY_SECTIONS.includes(s) && e) {
-					entries.push({ section: s, entry: e });
-					return "";
-				}
-				// Unknown section or empty entry — leave block in output unchanged
-				return _;
-			},
-		)
-		.trim();
-	return { entries, cleanOutput };
-}
 

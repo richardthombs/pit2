@@ -82,6 +82,8 @@ Implements TypeScript code for pi extensions...
 - The name pool contains 30 names. Once a name is used — even if that member is later fired — it is retired permanently for the project. Effective lifetime maximum: 30 hires.
 - Multiple members can share the same role (horizontal scaling).
 
+**Tool equivalent:** `hire` is also available as an LLM-callable tool: `hire { role: "typescript-engineer" }`. This lets the Engineering Manager hire without using the slash command.
+
 ---
 
 ## `/fire <name>` — Remove a team member
@@ -93,7 +95,7 @@ Implements TypeScript code for pi extensions...
 **Flow:**
 1. Looks up the member by name (case-insensitive match).
 2. Shows a confirmation dialog: "Let go of \<name\> (\<role\>)?"
-3. On confirmation: removes the member from `.pi/roster.json` and updates the widget.
+3. On confirmation: removes the member from `.pi/roster.json`, deletes their memory file (`.pi/memory/<name>.md`) if it exists, and updates the widget.
 4. On cancellation: no change, shows "Cancelled."
 
 **Name retention:** The fired member's name is kept in `usedNames` and will not be reassigned to a future hire. This is permanent.
@@ -103,6 +105,8 @@ Implements TypeScript code for pi extensions...
 - No argument given: error notification showing usage.
 
 **Out of scope:** Firing a member does not affect any tasks already in progress — in-flight delegate calls are not cancelled.
+
+**Tool equivalent:** `fire` is also available as an LLM-callable tool: `fire { member: "Casey Kim" }`. Unlike the slash command, the tool version does **not** prompt for confirmation before removing the member.
 
 ---
 
@@ -177,10 +181,10 @@ Runs tasks sequentially. Each step can reference the previous step's output via 
 
 ### Async mode
 
-By default `delegate` runs synchronously — it blocks until all work is complete and then returns the results. Setting `async: true` changes this: the tool returns immediately and results are injected as a follow-up message into the Engineering Manager's conversation when the work finishes.
+Async mode is **on by default**. When active, `delegate` returns immediately and results are injected as a follow-up message into the Engineering Manager's conversation when the work finishes. Setting `async: false` (or running `/async off`) switches to synchronous mode, where `delegate` blocks until all work is complete and returns results directly.
 
 **Parameter:**
-- `async` — `true` to return immediately; `false` (default) to block until complete.
+- `async` — override the session async flag for this call: `true` to return immediately; `false` to block until complete. If omitted, the session flag (on by default) applies.
 
 **When to use it:** Fire off a long-running task while continuing to do other things in the current turn — for example, kicking off a background research task while drafting a plan. Because results arrive as a follow-up message, the EM can respond to them naturally when they land.
 
@@ -192,7 +196,7 @@ By default `delegate` runs synchronously — it blocks until all work is complet
 | Parallel | One message per task, delivered independently as each completes |
 | Chain | One combined message when all steps finish (or when the chain halts on failure) |
 
-**Sync behaviour is unchanged:** When `async: false` (the default), `delegate` behaves exactly as before — it blocks and returns results directly. No migration is needed for existing usage.
+**Switching to sync:** Pass `async: false` explicitly or run `/async off` to make `delegate` block and return results directly.
 
 **Widget updates:** The team widget reflects live status in real-time in both modes. Members transition through `working` → `done`/`error` as tasks progress, regardless of whether `async` is set.
 
@@ -204,6 +208,18 @@ By default `delegate` runs synchronously — it blocks until all work is complet
 - Role name not found on roster → error prompting to hire with `/hire <role>`.
 - Role definition file missing for a rostered member → error naming the missing file.
 - No `task`, `tasks`, or `chain` provided → usage error.
+
+### Auto-scaling
+
+When you delegate by role and all current members of that role are busy, the system automatically hires a new team member for that role to handle the task. The output will include a note such as "Auto-hired Riley Torres (typescript-engineer) — task started."
+
+**How it applies:**
+- **By role** (`role: "typescript-engineer"`): if all members of that role are busy, a new one is auto-hired.
+- **By name** (`member: "Casey Kim"`): if that specific member is busy, the system falls back to role-based resolution — including auto-scaling — using their role.
+
+**Limits:** Auto-scaling is bounded by the name pool. If all 30 names have been used and every current member of the role is busy, delegation fails with a "Name pool exhausted" error.
+
+**Roster impact:** Auto-hired members remain on the roster after the task completes. They are available for future delegations and maintain their own memory.
 
 ---
 
@@ -221,17 +237,18 @@ By default `delegate` runs synchronously — it blocks until all work is complet
 
 **Current state display:** The Engineering Manager line in the team widget shows the current mode: `async: on` or `async: off` alongside other session indicators. The state reflects the flag immediately after any `/async` command.
 
-**Session scope:** The flag resets to **off** whenever the session starts or `/reload` is invoked. There is no persistence across sessions.
+**Session scope:** The flag resets to **on** whenever the session starts or `/reload` is invoked. There is no persistence across sessions.
 
 **Interaction with the `async` parameter on `delegate`:** An explicit `async: true` or `async: false` argument passed directly to a `delegate` call always takes precedence over the session toggle. The session flag only applies when no explicit `async` parameter is given.
 
 **Example flow:**
 ```
-/async on          # enable async for this session
-delegate { role: "qa-engineer", task: "..." }   # returns immediately
+delegate { role: "qa-engineer", task: "..." }   # returns immediately — async is on by default
 # ... continue planning while QA runs ...
 # follow-up message arrives with QA results
-/async off         # back to synchronous delegation
+/async off         # switch to synchronous delegation
+delegate { role: "typescript-engineer", task: "..." }   # blocks until complete
+/async on          # restore async mode
 ```
 
 **Out of scope:** The toggle does not affect tasks already in flight — changing the flag mid-turn only influences subsequent `delegate` calls.
@@ -295,50 +312,24 @@ Token counts are formatted with `k`/`M` suffixes (e.g. `12.3k`, `1.2M`). Fields 
 
 ---
 
-## Per-role memory
+## Per-member memory
 
-**What it does:** Gives selected roles a persistent memory that carries forward across delegations. Each time a memory-enabled role completes a task, it can record new facts — conventions, decisions, pitfalls, codebase landmarks — and those facts are automatically included in the agent's context on the next delegation. Memory accumulates over time, so roles become progressively better-informed about the project.
+**What it does:** Gives each team member a persistent memory that carries forward across delegations. On every delegation, the member's memory file (if it exists) is automatically injected into their context along with their name and memory file path. The member is instructed to read it at task start and update it at task end. Memory accumulates over time, so members become progressively better-informed about the project.
 
-**Opt-in:** Memory is not enabled for all roles. The roles that currently participate are: `typescript-engineer`, `software-architect`, `qa-engineer`, `prompt-engineer`, and `pi-specialist`. The `documentation-steward` and `technical-writer` roles do not use memory because their output tends to be project-specific rather than role-reusable knowledge.
+**Always on:** Memory is enabled for all members automatically — no configuration or opt-in required.
 
-**Memory file location:** `.pi/memory/<role-name>.md` — one file per role, shared by all members of that role. Files are created automatically on the first write; no setup is needed.
+**Memory file location:** `.pi/memory/<member-name>.md` — one file per team member (e.g. `.pi/memory/casey-kim.md`). Files are created by agents on their first write; no setup is needed.
 
-**How memory is injected:** When a delegation is dispatched to a memory-enabled role, if a memory file exists for that role, its contents are appended to the agent's system prompt under a `## Role Memory` heading. The agent sees this as background context for the task.
+**How memory is injected:** On every delegation, the agent's system prompt is extended with a `## Your Identity & Memory` block that tells them their name, the path to their memory file, and instructs them to read it at the start of the task and update it at the end. If a memory file already exists and has content, its full contents are appended to this block so prior context is immediately visible.
 
-**How agents write memory:** Agents surface new memories by emitting a structured comment block at the end of their response:
-
-```
-<!-- MEMORY
-section: Conventions
-entry: One concise sentence describing what to remember
--->
-```
-
-The org extension strips these blocks from the output the Engineering Manager sees, and writes the entries into the memory file.
-
-**Valid sections:**
-
-| Section | What belongs here |
-|---|---|
-| `Conventions` | Code style, naming patterns, project-level norms |
-| `Decisions` | Architectural or design choices that have been made |
-| `Pitfalls` | Known failure modes, gotchas, things to avoid |
-| `EM Preferences` | How the Engineering Manager likes things done |
-| `Codebase Landmarks` | Key files, entry points, module boundaries |
-| `Miscellaneous` | Anything useful that doesn't fit the above |
-
-**Bounds:** Each section holds a maximum of 10 entries. When a section is full, the oldest entry is dropped to make room (FIFO). Total memory is targeted at approximately 500 tokens.
-
-**Memory file format:** Plain markdown with YAML frontmatter (role, version, last_updated, entry_count) followed by fixed section headings. Files are human-editable directly — you can read, correct, or prune entries by hand.
-
-**Correcting stale entries:** Agents can flag outdated knowledge by emitting a new memory entry that notes the correction. There is no explicit delete mechanism; stale entries age out naturally under the FIFO limit.
+**How agents write memory:** Agents use their standard file tools (`write`, `edit`) to update their memory file directly. The content and format are up to the agent. Common content includes project conventions, architectural decisions, pitfalls encountered, and key file locations.
 
 **Lifecycle:**
-- Memory files are created on the first write for a role; no bootstrapping is required.
-- Firing a team member does **not** delete the role's memory file. Memory is attached to the role, not the individual. If the role is staffed again, memory resumes from where it was.
+- Memory files are created by agents on their first write; no bootstrapping is required.
+- Firing a team member **deletes** their memory file.
 - Memory persists across sessions — it is the only team-level state that does.
 
-**Out of scope:** Memory is not per-member — all members of the same role share one memory file. There is no way to scope memory to a specific member or task. There is no automatic summarisation; entries are stored verbatim and aged out by FIFO when the section limit is reached.
+**Out of scope:** Memory is per-member, not shared across members of the same role. Two members holding the same role maintain independent memories. There is no automatic summarisation or pruning — agents manage their own files directly.
 
 ---
 

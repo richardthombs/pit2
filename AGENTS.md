@@ -12,7 +12,7 @@ An AI-powered software engineering team. The top-level pi session is the **Engin
 | `/roles` | List available roles with staffing status |
 | `/hire <role>` | Add a team member (name assigned automatically; max 30 members) |
 | `/fire <name>` | Remove a team member (prompts for confirmation) |
-| `/async [on\|off]` | Toggle async delegation. When on, `delegate` returns immediately and delivers results as follow-up messages. Bare `/async` toggles; `/async on` or `/async off` sets explicitly. |
+| `/async [on\|off]` | Toggle async delegation (on by default). When on, `delegate` returns immediately and delivers results as follow-up messages. Bare `/async` toggles; `/async on` or `/async off` sets explicitly. |
 
 ## Delegating work
 
@@ -29,7 +29,7 @@ delegate { chain: [{ role: "software-architect", task: "design X" },
                    { role: "typescript-engineer", task: "implement {previous}" }] }
 ```
 
-Tasks must be self-contained: include all context the team member needs (file paths, specs, constraints). Team members have no memory of previous sessions.
+Tasks must be self-contained: include all context the team member needs (file paths, specs, constraints). Each member maintains a personal memory file that persists across sessions, but this supplements rather than replaces explicit context in the task brief.
 
 ## Team widget
 
