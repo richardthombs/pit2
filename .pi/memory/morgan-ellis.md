@@ -26,7 +26,13 @@ I am Morgan Ellis, QA Engineer embedded in the pit2 multi-agent engineering orga
   - `message_end` message collection and full token accumulation block are 100% intact.
   - No references to the removed/old event names remain in any `.ts` source file. One `tool_use` string in `utils.test.ts` line ~246 is test data for content block filtering, not event type matching — benign.
   - All 41 tests pass after change.
-  - Change is an uncommitted working-tree diff at the time of review.
+
+- 2026-05-05: Memory prompt block update reviewed and approved.
+  - Single line changed: `let memBlock = …` assignment in `runTask` (line 249 of `index.ts`).
+  - New block instructs agents to: (1) read memory at task start, (2) silently update memory via tool calls before final response with no commentary/confirmation, (3) produce no further text after final response.
+  - All three instructions confirmed present verbatim in the new template literal.
+  - Surrounding injection structure (memPath binding, ${memberName}/${memPath} placeholders, conditional append, non-fatal catch) verified intact.
+  - All 41 tests pass.
 
 ## QA patterns observed
 - `withFileMutationQueue` used for roster writes (safe) but bypassed inside `withScalingLock` during auto-hire (intentional, documented comment in code).

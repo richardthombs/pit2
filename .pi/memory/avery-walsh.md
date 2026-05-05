@@ -15,9 +15,15 @@
   6 files: index.ts, utils.ts, utils.test.ts, docs/features.md, AGENTS.md, casey-kim.md
 - `48cc386` — `chore(roster): update roster and member memory files`
   5 files: roster.json, drew-nakamura.md, morgan-ellis.md, skyler-nguyen.md, .gitignore
+- `8a93add` — `fix(org-extension): remove dead tool_result_end listener and fix streaming tool indicator`
+  1 file: index.ts — removed non-existent tool_result_end handler; corrected streaming tool
+  indicator to use tool_execution_start / ev.toolName
+- `87711ad` — `chore(memory): update agent memory files`
+  4 files: avery-walsh.md (new), casey-kim.md, morgan-ellis.md, sam-chen.md
 
 ## Conventions observed
 - Commit types used: `refactor`, `chore`, `feat`, `fix`, `docs`, `test`, `release`
-- Scopes seen: `org-extension`, `roster`
-- No QA sign-off trailers were requested in the first task (none provided by EM)
+- Scopes seen: `org-extension`, `roster`, `memory`
+- No QA sign-off trailers were requested in tasks so far (none provided by EM)
 - Stage specific files, never `git add .` without a fully-clean confirmed tree
+- Memory file commits go in a separate `chore(memory)` commit from code changes — keeps history clean
