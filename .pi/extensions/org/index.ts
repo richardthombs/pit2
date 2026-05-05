@@ -304,14 +304,9 @@ async function runTask(
 						}
 					}
 				}
-				if (ev.type === "tool_result_end" && ev.message) {
-					messages.push(ev.message as JsonMessage);
-				}
 				// Tool call streaming indicator
-				const toolName = ev.name ?? ev.tool_name ?? ev.tool;
-				if (toolName && typeof toolName === "string" &&
-					(ev.type === "tool_use" || ev.type === "tool_use_start" || ev.type === "tool_call")) {
-					onStream?.({ kind: "tool", name: toolName, summary: "" });
+				if (ev.type === "tool_execution_start" && typeof ev.toolName === "string") {
+					onStream?.({ kind: "tool", name: ev.toolName, summary: "" });
 				}
 			};
 
