@@ -246,7 +246,18 @@ async function runTask(
 		// Per-member memory injection (always on)
 		const memPath = memberMemoryPath(cwd, memberName);
 		try {
-			let memBlock = `\n\n---\n## Your Identity & Memory\n\nYour name is ${memberName}. Your memory file is at ${memPath}.\n\nAt the start of each task, read your memory file if it exists to recall relevant context.\n\nBefore writing your final response: silently update your memory file using write/edit tools — no commentary, no confirmation. After your final response, produce no further text.`;
+			const FALLBACK_MEM_INSTRUCTIONS = `## Your Identity & Memory\n\nYour name is ${memberName}. Your memory file is at ${memPath}.\n\nAt the start of each task, read your memory file if it exists to recall relevant context.\n\nBefore writing your final response: silently update your memory file using write/edit tools — no commentary, no confirmation. After your final response, produce no further text.`;
+			let memInstructions: string;
+			try {
+				const instrPath = path.join(cwd, '.pi', 'memory-instructions.md');
+				const instrRaw = fs.readFileSync(instrPath, 'utf-8');
+				memInstructions = instrRaw
+					.replace(/\$\{memberName\}/g, memberName)
+					.replace(/\$\{memPath\}/g, memPath);
+			} catch {
+				memInstructions = FALLBACK_MEM_INSTRUCTIONS;
+			}
+			let memBlock = `\n\n---\n${memInstructions}`;
 			if (fs.existsSync(memPath)) {
 				const raw = fs.readFileSync(memPath, 'utf-8');
 				if (raw.trim()) {
