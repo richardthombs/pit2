@@ -29,7 +29,7 @@ delegate { chain: [{ role: "software-architect", task: "design X" },
                    { role: "typescript-engineer", task: "implement {previous}" }] }
 ```
 
-Tasks must be self-contained: include all context the team member needs (file paths, specs, constraints). Each member maintains a personal memory file that persists across sessions, but this supplements rather than replaces explicit context in the task brief.
+Each team member maintains a personal memory file that persists across sessions.
 
 ## Team widget
 
