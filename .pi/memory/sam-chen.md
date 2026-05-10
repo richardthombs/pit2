@@ -51,3 +51,56 @@ The real events: `tool_execution_start` (has `.toolName` property), `tool_execut
 - `runTask()` / `RunResult`: `.pi/extensions/org/index.ts` line ~222 / ~42
 - EM system prompt: `.pi/SYSTEM.md`
 - Project context file: `AGENTS.md` (root)
+- `deliverResult()` function: `.pi/extensions/org/index.ts` line ~604
+
+## pi: invisible-to-UI but visible-to-LLM context injection
+
+**Mechanism: `pi.sendMessage({ ..., display: false })`**
+
+`CustomMessage.display: boolean` controls UI rendering only:
+- `interactive-mode.js:2449`: `if (message.display)` — skips rendering when false
+- `messages.js:89`: `case "custom"` in `convertToLlm()` — always sends to LLM regardless of `display`
+
+So `display: false` = hidden from chat, still in LLM context. ✅
+
+**Critical gotcha — turn triggering differs from `sendUserMessage`:**
+
+`sendCustomMessage()` logic (agent-session.js):
+```
+deliverAs === "nextTurn" → queue for next user turn (no trigger)
+isStreaming + deliverAs === "followUp" → agent.followUp() ✓
+isStreaming + no deliverAs → agent.steer() (triggers as steer)
+NOT streaming + triggerTurn → agent.prompt() ✓
+NOT streaming + no triggerTurn → append only, NO turn triggered ❌
+```
+
+`sendUserMessage({ deliverAs: "followUp" })` handles both cases: streaming→followUp, idle→direct prompt.
+`sendMessage({ deliverAs: "followUp" })` when idle → just appends, NO turn triggered.
+
+**Correct drop-in replacement for pit2's `deliverResult()`:**
+```typescript
+const isIdle = lastCtx?.isIdle() ?? true;
+pi.sendMessage(
+    { customType: "task_result", content: header + content, display: false },
+    isIdle ? { triggerTurn: true } : { deliverAs: "followUp" }
+);
+```
+
+Or if accepting steer-when-streaming behavior (less ideal but simpler):
+```typescript
+pi.sendMessage(
+    { customType: "task_result", content: header + content, display: false },
+    { triggerTurn: true }  // when streaming → degrades to steer
+);
+```
+
+## pi: `context` event for pre-LLM message injection
+
+`pi.on("context", handler)` fires in `streamAssistantResponse()` (agent-loop.js:154), receives `AgentMessage[]`, handler can return `{ messages: AgentMessage[] }` to replace the whole array. This happens AFTER `convertToLlm` feeds — actually BEFORE `convertToLlm`. The context event transforms `AgentMessage[]` first, then `convertToLlm` converts to LLM format. Messages injected this way are NEVER persisted to session history — they're transient per-call injections. Only visible to LLM, not rendered in UI.
+
+## pi: `before_agent_start` for per-turn context injection
+
+`pi.on("before_agent_start", handler)` can return `{ message: Pick<CustomMessage, ...>, systemPrompt?: string }`.
+- The `message` (with `display: false`) is injected alongside the user message for that turn only.
+- `systemPrompt` overrides the system prompt for just that turn, restored after.
+- Neither persisted to session history.
