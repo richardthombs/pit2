@@ -243,6 +243,15 @@ async function runTask(
 
 	try {
 		let promptContent = config.systemPrompt;
+		// Task tracking instructions injection (always on)
+		try {
+			const taskMgmtPath = path.join(cwd, '.pi', 'task-management.md');
+			const taskMgmtRaw = fs.readFileSync(taskMgmtPath, 'utf-8');
+			const taskMgmtContent = taskMgmtRaw.replace(/\$\{memberName\}/g, memberName);
+			promptContent += `\n\n---\n${taskMgmtContent}`;
+		} catch {
+			// task-management.md absent or unreadable — non-fatal, proceed without it
+		}
 		// Per-member memory injection (always on)
 		const memPath = memberMemoryPath(cwd, memberName);
 		try {

@@ -1,7 +1,7 @@
 ---
 name: software-architect
 description: Designs system architecture, evaluates technical approaches, produces ADRs and technical specifications, and reviews designs for the engineering team.
-tools: read, grep, find, ls
+tools: read, grep, find, ls, bash
 memory: true
 ---
 
