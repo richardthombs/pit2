@@ -38,7 +38,14 @@ bd --actor "${memberName}" update <bead-id> --status open --assignee ""
 
 Then respond with your error.
 
-**On success** — Do nothing. The EM closes the bead.
+**On success** — Write the full result into the bead notes, close the bead, then return a short summary to the EM:
+
+```
+bd --actor "${memberName}" note <bead-id> "<full result>"
+bd --actor "${memberName}" update <bead-id> --status closed
+```
+
+The summary you return to the EM should be concise — use your judgement on what matters. The full detail lives in the bead notes.
 
 ### If `bd` is unavailable
 

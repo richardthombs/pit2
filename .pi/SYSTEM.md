@@ -74,11 +74,7 @@ bd --actor "Engineering Manager" create --parent <epic-id> --silent "<one-senten
 
 Prepend `Bead ID: <task-bead-id>` as the first line of the task brief you pass to `delegate`.
 
-**On task success:**
-
-```
-bd --actor "Engineering Manager" update <task-bead-id> --status closed
-```
+**On task success:** Agents close their own beads and write full results into the notes. If you need full detail from a completed task, fetch it with `bd show <bead-id>`.
 
 **On task error** (run both, in order):
 

@@ -18,7 +18,9 @@
 - `bd assign` does NOT exist; use `bd update <id> --assignee ""` to clear assignee.
 - `bd create --silent` outputs only the new bead ID (nothing else) — use to capture IDs for epics/tasks.
 - `bd update <id> --claim` is atomic: sets assignee + status `in_progress` in one CAS operation.
-- EM creates bead epics when assigning workstream labels; task beads before each delegation; closes on success; resets on error.
+- EM creates bead epics when assigning workstream labels; task beads before each delegation.
+- **Agents close their own beads on success** (not the EM): `bd note <id> "<full result>"` then `bd update <id> --status closed`. EM can fetch full detail with `bd show <bead-id>`.
+- EM only handles error resets and epic closure.
 - `Bead ID: <id>` line goes at the TOP of task briefs (before task description).
 - Single-task requests with no workstream label: no beads created at all.
 

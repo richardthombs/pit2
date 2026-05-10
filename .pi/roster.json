@@ -65,6 +65,12 @@
       "name": "Remy Osei",
       "role": "qa-engineer",
       "hiredAt": "2026-05-10T06:47:51.371Z"
+    },
+    {
+      "id": "blake-obrien",
+      "name": "Blake O'Brien",
+      "role": "technical-writer",
+      "hiredAt": "2026-05-10T07:51:34.410Z"
     }
   ],
   "usedNames": [
@@ -82,6 +88,7 @@
     "Quinn Patel",
     "Lennox Ibrahim",
     "Drew Nakamura",
-    "Remy Osei"
+    "Remy Osei",
+    "Blake O'Brien"
   ]
 }
