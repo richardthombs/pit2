@@ -603,7 +603,11 @@ export default function (pi: ExtensionAPI) {
 
 	function deliverResult(memberName: string, roleName: string, content: string): void {
 		const header = `Background task completed — **${memberName}** (${roleName}):\n\n`;
-		pi.sendUserMessage(header + content, { deliverAs: "followUp" });
+		const isIdle = lastCtx?.isIdle() ?? true;
+		pi.sendMessage(
+			{ customType: "task_result", content: header + content, display: false },
+			isIdle ? { triggerTurn: true } : { deliverAs: "followUp" },
+		);
 	}
 
 	function updateWidget(ctx: any): void {
